@@ -1,0 +1,18 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin
+Disallow: /restaurant-admin
+Disallow: /platform-admin
+Disallow: /track
+Disallow: /cart
+Disallow: /checkout
+Disallow: /onboarding
+Disallow: /login
+Disallow: /*/track/
+Disallow: /*/cart
+Disallow: /*/checkout
+Disallow: /table/
+Disallow: /counter
+
+Sitemap: https://www.starters4u.in/sitemap.xml

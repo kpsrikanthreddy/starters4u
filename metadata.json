@@ -1,0 +1,8 @@
+{
+  "name": "MOZZ Chinese & Pizzateria",
+  "description": "Starters4U Multi-Restaurant Online Food Ordering Platform & MOZZ Flagship Storefront in Hyderabad with Korean-Style Pocket Pizzas, Indo-Chinese starters, live KOT ticketing, and automated multi-tenant administration.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

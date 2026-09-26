@@ -1,0 +1,10 @@
+{
+  "name": "MOZZ Chinese & Pizzateria",
+  "short_name": "MOZZ",
+  "description": "Order Korean-style pocket pizzas and Indo-Chinese food online in Gachibowli, Hyderabad.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8f9fa",
+  "theme_color": "#18181b",
+  "lang": "en-IN"
+}
