@@ -35,7 +35,9 @@ export interface BillItemPayload {
   itemTotal: number;
   selectedShape?: string;
   selectedCrust?: string;
+  spiceLevel?: string;
   addons?: string[];
+  specialInstructions?: string;
 }
 
 export interface BillTicketPayload {
@@ -43,6 +45,7 @@ export interface BillTicketPayload {
   branchName: string;
   branchAddress?: string;
   branchPhone?: string;
+  tagline?: string;
   gstin?: string;
   billNumber: string;
   orderNumber: string;
@@ -55,10 +58,17 @@ export interface BillTicketPayload {
   isReprint: boolean;
   items: BillItemPayload[];
   itemTotal: number;
-  discount: number;
+  subtotal: number;
+  taxableAmount?: number;
+  cgst?: number;
+  sgst?: number;
   tax: number;
   taxRate?: number;
   deliveryFee: number;
+  platformMarkup?: number;
+  packingCharges?: number;
+  discount: number;
+  couponCode?: string;
   grandTotal: number;
   paymentMethod: string;
   paymentStatus: string;

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAdminAuth } from '../../../context/AdminAuthContext';
 import { soundService } from '../../../utils/audio';
+import { PrintModal } from '../../PrintModal';
 import {
   Search,
   Filter,
@@ -31,6 +32,16 @@ export const OrdersSection: React.FC = () => {
   const [isUpdating, setIsUpdating] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [printType, setPrintType] = useState<'kot' | 'bill'>('kot');
+  const [restaurantProfile, setRestaurantProfile] = useState<any>(null);
+
+  useEffect(() => {
+    adminFetch('/api/admin/settings')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data) setRestaurantProfile(data);
+      })
+      .catch((err) => console.warn('[OrdersSection] Could not load restaurant profile:', err));
+  }, [adminFetch]);
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -421,8 +432,8 @@ export const OrdersSection: React.FC = () => {
                     <div key={idx} className="py-2 flex items-center justify-between text-xs">
                       <div>
                         <div className="font-bold text-slate-800">
-							{item.quantity}x {item.menuItem?.name || item.name || item.itemName || 'Item'}
-						</div>			
+                          {item.quantity}x {item.name || item.itemName}
+                        </div>
                         {item.specialInstructions && (
                           <div className="text-[10px] text-amber-600 italic">
                             Note: {item.specialInstructions}
@@ -430,10 +441,7 @@ export const OrdersSection: React.FC = () => {
                         )}
                       </div>
                       <div className="font-black text-slate-900">
-                        ₹{(
-							Number(item.unitPrice ?? item.customerUnitPrice ?? item.menuItem?.price ?? item.price ?? 0) *
-							Number(item.quantity || 1)
-							).toLocaleString('en-IN')}
+                        ₹{Number(item.price || item.unitPrice || 0) * Number(item.quantity || 1)}
                       </div>
                     </div>
                   ))}
@@ -549,94 +557,14 @@ export const OrdersSection: React.FC = () => {
         )}
       </div>
 
-      {/* Thermal Print Simulation Modal */}
+      {/* Detailed Itemized Tax Invoice & KOT Modal */}
       {showPrintModal && selectedOrder && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-2">
-                <Printer className="w-4 h-4 text-rose-600" />
-                <h3 className="font-extrabold text-sm text-slate-900">
-                  {printType === 'kot' ? 'Kitchen Order Ticket (KOT)' : 'Customer Bill Receipt'}
-                </h3>
-              </div>
-              <button
-                onClick={() => setShowPrintModal(false)}
-                className="p-1 rounded-lg hover:bg-slate-100 text-slate-400"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Receipt Preview */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 font-mono text-[11px] leading-relaxed space-y-2">
-              <div className="text-center font-bold text-slate-900">
-                {restaurant?.name || user?.restaurantName || 'RESTAURANT'}
-              </div>
-              <div className="text-center text-[10px] text-slate-500">
-                {printType === 'kot' ? '*** KITCHEN COPY (KOT) ***' : '*** TAX INVOICE ***'}
-              </div>
-              <div className="border-t border-dashed border-slate-300 pt-1 flex justify-between">
-                <span>ORDER: {selectedOrder.orderNumber || selectedOrder.id.slice(0, 8)}</span>
-                <span>{new Date().toLocaleTimeString()}</span>
-              </div>
-              {selectedOrder.tableNumber && (
-                <div className="font-bold text-slate-800">
-                  TABLE: {selectedOrder.tableNumber} ({selectedOrder.orderType})
-                </div>
-              )}
-              <div className="border-t border-dashed border-slate-300 pt-1 space-y-1">
-			{selectedOrder.items?.map((item: any, i: number) => (
-  <div key={i} className="flex justify-between">
-    <span>
-      {item.quantity}x{' '}
-      {item.menuItem?.name || item.name || item.itemName || 'Item'}
-    </span>
-
-    {printType === 'bill' && (
-      <span>
-        ₹{(
-          Number(
-            item.unitPrice ??
-            item.customerUnitPrice ??
-            item.menuItem?.price ??
-            item.price ??
-            0
-          ) * Number(item.quantity || 1)
-        ).toFixed(2)}
-      </span>
-    )}
-  </div>
-))}
-              </div>
-              {printType === 'bill' && (
-                <div className="border-t border-dashed border-slate-300 pt-1 flex justify-between font-bold text-slate-900">
-                  <span>TOTAL AMOUNT:</span>
-                  <span>₹{Number(selectedOrder.grandTotal || selectedOrder.total || 0)}</span>
-                </div>
-              )}
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  window.print();
-                  setShowPrintModal(false);
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs transition flex items-center justify-center gap-1.5"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span>Send to Thermal Printer</span>
-              </button>
-              <button
-                onClick={() => setShowPrintModal(false)}
-                className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        <PrintModal
+          order={selectedOrder}
+          type={printType === 'kot' ? 'kot' : 'receipt'}
+          restaurantInfo={restaurantProfile || restaurant}
+          onClose={() => setShowPrintModal(false)}
+        />
       )}
     </div>
   );

@@ -66,19 +66,27 @@ export function broadcastPrintEvent(restaurantId: string, branchId: string, even
 
 // Helper to fetch Restaurant and Branch metadata for ticket rendering
 async function getRestaurantAndBranchInfo(restaurantId: string, branchId: string) {
-  let restaurantName = 'Starters4U / MOZZ';
+  let restaurantName = 'Starters4U Kitchen';
   let branchName = 'Main Branch';
-  let branchAddress = 'Food Street Hub';
-  let branchPhone = '+91 98450 12345';
-  let gstin = '36AAACM1234F1Z5';
+  let branchAddress = '';
+  let branchPhone = '';
+  let gstin = '';
+  let tagline = '';
   let taxRate = 5.0;
 
   if (isPostgresRunning()) {
     try {
-      const restRes = await query(`SELECT name, tax_rate FROM restaurants WHERE id = $1 LIMIT 1`, [restaurantId]);
+      const restRes = await query(`SELECT name, tagline, tax_rate, phone FROM restaurants WHERE id = $1 LIMIT 1`, [restaurantId]);
       if (restRes.rows.length > 0) {
         restaurantName = restRes.rows[0].name;
+        tagline = restRes.rows[0].tagline || '';
         taxRate = Number(restRes.rows[0].tax_rate || 5.0);
+        if (restRes.rows[0].phone) branchPhone = restRes.rows[0].phone;
+      }
+      const settRes = await query(`SELECT address, phone FROM restaurant_settings WHERE restaurant_id = $1 LIMIT 1`, [restaurantId]);
+      if (settRes.rows.length > 0) {
+        if (settRes.rows[0].address) branchAddress = settRes.rows[0].address;
+        if (settRes.rows[0].phone) branchPhone = settRes.rows[0].phone;
       }
       const branchRes = await query(`SELECT name, address, phone FROM restaurant_branches WHERE id = $1 LIMIT 1`, [branchId]);
       if (branchRes.rows.length > 0) {
@@ -93,7 +101,15 @@ async function getRestaurantAndBranchInfo(restaurantId: string, branchId: string
     const r = inMemoryDb.restaurants.find((rest) => rest.id === restaurantId);
     if (r) {
       restaurantName = r.name;
+      tagline = r.tagline || '';
       taxRate = Number(r.tax_rate || 5.0);
+      if (r.phone) branchPhone = r.phone;
+    }
+    const s = (inMemoryDb.restaurant_settings || []).find((st) => st.restaurant_id === restaurantId);
+    if (s) {
+      if (s.gstin) gstin = s.gstin;
+      if (s.address) branchAddress = s.address;
+      if (s.phone) branchPhone = s.phone;
     }
     const b = inMemoryDb.restaurant_branches.find((br) => br.id === branchId);
     if (b) {
@@ -103,7 +119,7 @@ async function getRestaurantAndBranchInfo(restaurantId: string, branchId: string
     }
   }
 
-  return { restaurantName, branchName, branchAddress, branchPhone, gstin, taxRate };
+  return { restaurantName, branchName, branchAddress, branchPhone, gstin, tagline, taxRate };
 }
 
 // Build KOT Ticket Payload (Strictly NO pricing or payment details)
@@ -118,7 +134,7 @@ export function buildKotPayload(
   const tableNum = order.tableNumber || order.customer?.tableNumber || order.qrSession?.tableNumber || undefined;
 
   const items = order.items.map((it) => {
-    const itemName = it.menuItem?.name || (it as any).itemName || 'Item';
+    const itemName = it.menuItem?.name || (it as any).itemName || (it as any).name || 'Item';
     const addonNames = Array.isArray(it.addons)
       ? it.addons.map((a: any) => (typeof a === 'string' ? a : a.name || ''))
       : [];
@@ -155,14 +171,14 @@ export function buildKotPayload(
 // Build Bill Ticket Payload (With full item totals, taxes, discount, and payment summary)
 export function buildBillPayload(
   order: Order,
-  info: { restaurantName: string; branchName: string; branchAddress: string; branchPhone: string; gstin: string; taxRate: number },
+  info: { restaurantName: string; branchName: string; branchAddress: string; branchPhone: string; gstin: string; tagline?: string; taxRate: number },
   isReprint = false
 ): BillTicketPayload {
   const orderNumber = order.orderNumber || (order as any).order_number || `ORD-${order.id.slice(0, 6)}`;
   const tableNum = order.tableNumber || order.customer?.tableNumber || order.qrSession?.tableNumber || undefined;
 
   const items = order.items.map((it) => {
-    const itemName = it.menuItem?.name || (it as any).itemName || 'Item';
+    const itemName = it.menuItem?.name || (it as any).itemName || (it as any).name || 'Item';
     const addonNames = Array.isArray(it.addons)
       ? it.addons.map((a: any) => (typeof a === 'string' ? a : a.name || ''))
       : [];
@@ -174,16 +190,26 @@ export function buildBillPayload(
       itemTotal: Math.round(it.quantity * it.unitPrice * 100) / 100,
       selectedShape: it.selectedShape,
       selectedCrust: it.selectedCrust,
+      spiceLevel: it.spiceLevel,
       addons: addonNames,
+      specialInstructions: it.specialInstructions,
     };
   });
+
+  const subtotal = Number(order.itemTotal || 0);
+  const discount = Number(order.discount || 0);
+  const taxableAmount = Math.max(0, subtotal - discount);
+  const tax = Number(order.tax || 0);
+  const cgst = Math.round((tax / 2) * 100) / 100;
+  const sgst = Math.round((tax - cgst) * 100) / 100;
 
   return {
     restaurantName: info.restaurantName,
     branchName: info.branchName,
     branchAddress: info.branchAddress,
     branchPhone: info.branchPhone,
-    gstin: info.gstin,
+    tagline: info.tagline,
+    gstin: info.gstin || undefined,
     billNumber: `BILL-${orderNumber.replace(/[^0-9A-Z-]/gi, '')}`,
     orderNumber,
     orderTime: order.createdAt || new Date().toISOString(),
@@ -194,15 +220,22 @@ export function buildBillPayload(
     customerAddress: order.customer?.address,
     isReprint,
     items,
-    itemTotal: order.itemTotal,
-    discount: order.discount || 0,
-    tax: order.tax,
+    subtotal,
+    itemTotal: subtotal,
+    taxableAmount,
+    cgst,
+    sgst,
+    discount,
+    couponCode: order.couponCode,
+    tax,
     taxRate: info.taxRate,
     deliveryFee: order.deliveryFee || 0,
+    platformMarkup: order.platformMarkupTotal || 0,
+    packingCharges: 0,
     grandTotal: order.grandTotal,
     paymentMethod: order.paymentMethod,
     paymentStatus: order.paymentStatus,
-    footerMessage: 'Thank you for ordering with us! Visit again.',
+    footerMessage: `Thank you for ordering with ${info.restaurantName}!`,
     website: 'starters4u.in',
   };
 }
