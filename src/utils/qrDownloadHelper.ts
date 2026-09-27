@@ -1,5 +1,7 @@
 import QRCode from 'qrcode';
 
+export type StandCardTheme = 'obsidian_gold' | 'ruby_rose' | 'clean_minimal';
+
 export interface StandCardOptions {
   title?: string;
   subtitle?: string;
@@ -7,11 +9,14 @@ export interface StandCardOptions {
   identifier: string; // e.g. "Table 4" or "Counter Express"
   subText?: string;
   qrUrl: string;
-  themeColor?: string;
+  theme?: StandCardTheme;
+  tableName?: string;
+  restaurantLogoText?: string;
+  includeAcrylicBase?: boolean;
 }
 
 /**
- * Generates a clean Data URL for a QR Code
+ * Generates a clean Data URL for a high-contrast QR Code
  */
 export async function generateQRDataURL(url: string, size: number = 800): Promise<string> {
   try {
@@ -51,11 +56,12 @@ export async function downloadQRImage(url: string, filename: string, size: numbe
 }
 
 /**
- * Renders a full, restaurant-ready acrylic table stand / tent card on an HTML5 canvas and exports as PNG
+ * Renders a full, restaurant-ready acrylic table stand / tent card on an HTML5 canvas and exports as PNG.
+ * Formatted for standard 4x6" and 5x7" acrylic tabletop displays at high DPI (1200 x 1800).
  */
 export async function generateTableStandDataURL(options: StandCardOptions): Promise<string> {
-  const width = 1000;
-  const height = 1400;
+  const width = 1200;
+  const height = 1800;
 
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -66,107 +72,230 @@ export async function generateTableStandDataURL(options: StandCardOptions): Prom
     throw new Error('Canvas 2D context not available');
   }
 
-  // 1. Background Gradient (Sleek Dark Slate & Warm Amber/Rose)
   const isCounter = options.identifier.toLowerCase().includes('counter');
-  const bgGrad = ctx.createLinearGradient(0, 0, width, height);
-  if (isCounter) {
-    bgGrad.addColorStop(0, '#0f172a');
-    bgGrad.addColorStop(0.5, '#1e1b4b');
-    bgGrad.addColorStop(1, '#0f172a');
+  const theme: StandCardTheme = options.theme || (isCounter ? 'ruby_rose' : 'obsidian_gold');
+
+  // Define Palette according to chosen Theme
+  let bgGradient: [string, string, string];
+  let primaryAccent: string;
+  let secondaryAccent: string;
+  let borderGlow: string;
+  let textColorPrimary: string;
+  let textColorSecondary: string;
+  let stepBadgeBg: string;
+  let stepBadgeText: string;
+
+  if (theme === 'clean_minimal') {
+    bgGradient = ['#ffffff', '#f8fafc', '#f1f5f9'];
+    primaryAccent = '#0f172a';
+    secondaryAccent = '#e11d48';
+    borderGlow = 'rgba(15, 23, 42, 0.12)';
+    textColorPrimary = '#0f172a';
+    textColorSecondary = '#475569';
+    stepBadgeBg = '#0f172a';
+    stepBadgeText = '#ffffff';
+  } else if (theme === 'ruby_rose') {
+    bgGradient = ['#3b0714', '#1c1917', '#09090b'];
+    primaryAccent = '#f43f5e';
+    secondaryAccent = '#fbbf24';
+    borderGlow = 'rgba(244, 63, 94, 0.4)';
+    textColorPrimary = '#ffffff';
+    textColorSecondary = '#fda4af';
+    stepBadgeBg = '#f43f5e';
+    stepBadgeText = '#ffffff';
   } else {
-    bgGrad.addColorStop(0, '#0f172a');
-    bgGrad.addColorStop(0.45, '#1c1917');
-    bgGrad.addColorStop(1, '#1e1b4b');
+    // obsidian_gold (Default)
+    bgGradient = ['#0b0f19', '#151928', '#07090e'];
+    primaryAccent = '#f59e0b';
+    secondaryAccent = '#fbbf24';
+    borderGlow = 'rgba(245, 158, 11, 0.4)';
+    textColorPrimary = '#ffffff';
+    textColorSecondary = '#fcd34d';
+    stepBadgeBg = '#f59e0b';
+    stepBadgeText = '#0f172a';
   }
 
-  ctx.fillStyle = bgGrad;
+  // 1. Background Fill
+  const grad = ctx.createLinearGradient(0, 0, width, height);
+  grad.addColorStop(0, bgGradient[0]);
+  grad.addColorStop(0.5, bgGradient[1]);
+  grad.addColorStop(1, bgGradient[2]);
+  ctx.fillStyle = grad;
   ctx.fillRect(0, 0, width, height);
 
+  // Subtle radial ambient light behind the QR card
+  const radialGlow = ctx.createRadialGradient(width / 2, 850, 50, width / 2, 850, 550);
+  radialGlow.addColorStop(0, borderGlow);
+  radialGlow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = radialGlow;
+  ctx.fillRect(0, 300, width, 1100);
+
   // Outer decorative border
-  ctx.strokeStyle = isCounter ? 'rgba(59, 130, 246, 0.4)' : 'rgba(245, 158, 11, 0.4)';
-  ctx.lineWidth = 12;
-  ctx.strokeRect(30, 30, width - 60, height - 60);
+  ctx.strokeStyle = borderGlow;
+  ctx.lineWidth = 14;
+  ctx.strokeRect(36, 36, width - 72, height - 72);
 
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+  // Inner hairline border
+  ctx.strokeStyle = theme === 'clean_minimal' ? 'rgba(0, 0, 0, 0.08)' : 'rgba(255, 255, 255, 0.2)';
   ctx.lineWidth = 2;
-  ctx.strokeRect(44, 44, width - 88, height - 88);
+  ctx.strokeRect(52, 52, width - 104, height - 104);
 
-  // 2. Header Brand Banner
+  // Corner decorative flourishes
+  const cornerSize = 40;
+  ctx.strokeStyle = primaryAccent;
+  ctx.lineWidth = 4;
+  // Top-left
+  ctx.beginPath();
+  ctx.moveTo(60, 60 + cornerSize);
+  ctx.lineTo(60, 60);
+  ctx.lineTo(60 + cornerSize, 60);
+  ctx.stroke();
+  // Top-right
+  ctx.beginPath();
+  ctx.moveTo(width - 60 - cornerSize, 60);
+  ctx.lineTo(width - 60, 60);
+  ctx.lineTo(width - 60, 60 + cornerSize);
+  ctx.stroke();
+  // Bottom-left
+  ctx.beginPath();
+  ctx.moveTo(60, height - 60 - cornerSize);
+  ctx.lineTo(60, height - 60);
+  ctx.lineTo(60 + cornerSize, height - 60);
+  ctx.stroke();
+  // Bottom-right
+  ctx.beginPath();
+  ctx.moveTo(width - 60 - cornerSize, height - 60);
+  ctx.lineTo(width - 60, height - 60);
+  ctx.lineTo(width - 60, height - 60 - cornerSize);
+  ctx.stroke();
+
+  // 2. Header Section
   ctx.textAlign = 'center';
 
-  // Decorative top pill badge
-  const badgeY = 95;
-  const badgeText = isCounter ? '🛍️ EXPRESS TAKEAWAY' : '🍽️ DINE-IN SERVICE';
-  ctx.font = 'bold 24px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  // Service Pill Badge (top)
+  const badgeY = 115;
+  const badgeText = isCounter ? '🛍️  EXPRESS TAKEAWAY  🛍️' : '🍽️  CONTACTLESS DINE-IN SERVICE  🍽️';
+  ctx.font = 'bold 26px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
   const badgeMetrics = ctx.measureText(badgeText);
-  const badgeWidth = badgeMetrics.width + 60;
-  const badgeHeight = 44;
+  const badgeWidth = badgeMetrics.width + 70;
+  const badgeHeight = 52;
 
-  ctx.fillStyle = isCounter ? '#2563eb' : '#d97706';
+  ctx.fillStyle = primaryAccent;
   ctx.beginPath();
-  ctx.roundRect((width - badgeWidth) / 2, badgeY, badgeWidth, badgeHeight, 22);
+  ctx.roundRect((width - badgeWidth) / 2, badgeY, badgeWidth, badgeHeight, 26);
   ctx.fill();
 
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText(badgeText, width / 2, badgeY + 30);
+  ctx.fillStyle = stepBadgeText;
+  ctx.fillText(badgeText, width / 2, badgeY + 36);
 
-  // Brand Name
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '900 54px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-  ctx.fillText((options.title || 'RESTAURANT').toUpperCase(), width / 2, 210);
+  // Restaurant Name
+  ctx.fillStyle = textColorPrimary;
+  ctx.font = '900 68px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  const brandTitle = (options.title || 'MOZZ PIZZATERIA').toUpperCase();
+  ctx.fillText(brandTitle, width / 2, 260);
 
-  // Tagline
-  ctx.fillStyle = isCounter ? '#93c5fd' : '#fcd34d';
-  ctx.font = '600 24px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-  ctx.fillText(options.subtitle || 'Dine-In • Express Takeaway • Online Ordering', width / 2, 252);
+  // Tagline / Cuisine
+  ctx.fillStyle = textColorSecondary;
+  ctx.font = '600 28px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.fillText(options.subtitle || 'Dine-In • Pocket Pizzas • Starters • Express Takeaway', width / 2, 310);
 
-  // 3. Central Table/Identifier Banner
-  const tableBoxY = 295;
-  const tableBoxHeight = 115;
-  const tableBoxWidth = width - 180;
+  // 3. Prominent Table Banner Plaque
+  const tableBoxY = 360;
+  const tableBoxHeight = 140;
+  const tableBoxWidth = width - 200;
 
-  const tableGrad = ctx.createLinearGradient((width - tableBoxWidth) / 2, tableBoxY, (width + tableBoxWidth) / 2, tableBoxY + tableBoxHeight);
-  if (isCounter) {
-    tableGrad.addColorStop(0, 'rgba(37, 99, 235, 0.25)');
-    tableGrad.addColorStop(1, 'rgba(59, 130, 246, 0.15)');
+  const tableGrad = ctx.createLinearGradient(
+    (width - tableBoxWidth) / 2,
+    tableBoxY,
+    (width + tableBoxWidth) / 2,
+    tableBoxY + tableBoxHeight
+  );
+  if (theme === 'clean_minimal') {
+    tableGrad.addColorStop(0, 'rgba(15, 23, 42, 0.05)');
+    tableGrad.addColorStop(1, 'rgba(15, 23, 42, 0.02)');
   } else {
-    tableGrad.addColorStop(0, 'rgba(217, 119, 6, 0.25)');
-    tableGrad.addColorStop(1, 'rgba(245, 158, 11, 0.15)');
+    tableGrad.addColorStop(0, 'rgba(255, 255, 255, 0.08)');
+    tableGrad.addColorStop(1, 'rgba(255, 255, 255, 0.03)');
   }
 
   ctx.fillStyle = tableGrad;
   ctx.beginPath();
-  ctx.roundRect((width - tableBoxWidth) / 2, tableBoxY, tableBoxWidth, tableBoxHeight, 24);
+  ctx.roundRect((width - tableBoxWidth) / 2, tableBoxY, tableBoxWidth, tableBoxHeight, 28);
   ctx.fill();
 
-  ctx.strokeStyle = isCounter ? 'rgba(96, 165, 250, 0.8)' : 'rgba(251, 191, 36, 0.8)';
+  ctx.strokeStyle = primaryAccent;
   ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.roundRect((width - tableBoxWidth) / 2, tableBoxY, tableBoxWidth, tableBoxHeight, 24);
   ctx.stroke();
 
-  // Identifier text
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '900 58px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-  ctx.fillText(options.identifier.toUpperCase(), width / 2, tableBoxY + 74);
+  // Identifier (e.g. TABLE 5)
+  ctx.fillStyle = textColorPrimary;
+  ctx.font = '900 72px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.fillText(options.identifier.toUpperCase(), width / 2, tableBoxY + 82);
 
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-  ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-  ctx.fillText(isCounter ? 'Orders placed will be packed for takeaway' : 'Direct Kitchen KOT & Table Delivery', width / 2, tableBoxY + 102);
+  // Subtext under table number
+  ctx.fillStyle = textColorSecondary;
+  ctx.font = '700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  const tableArea = options.tableName ? `${options.tableName} • ` : '';
+  ctx.fillText(
+    isCounter ? 'Place order at counter for express packing' : `${tableArea}Direct Kitchen KOT & Table Delivery`,
+    width / 2,
+    tableBoxY + 120
+  );
 
-  // 4. White Card Containing QR Code
-  const qrCardY = 445;
-  const qrCardSize = 570;
+  // 4. White Center QR Card
+  const qrCardY = 540;
+  const qrCardSize = 720;
   const qrCardX = (width - qrCardSize) / 2;
 
-  // Outer shadow & background
+  // QR Card Drop Shadow
+  ctx.save();
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.35)';
+  ctx.shadowBlur = 40;
+  ctx.shadowOffsetY = 15;
+
   ctx.fillStyle = '#ffffff';
   ctx.beginPath();
-  ctx.roundRect(qrCardX, qrCardY, qrCardSize, qrCardSize, 36);
+  ctx.roundRect(qrCardX, qrCardY, qrCardSize, qrCardSize, 40);
   ctx.fill();
+  ctx.restore();
+
+  // Scan Finder Corner Brackets on the QR Card
+  const bracketSize = 50;
+  const bracketInset = 35;
+  ctx.strokeStyle = primaryAccent;
+  ctx.lineWidth = 6;
+  ctx.lineCap = 'round';
+
+  // Top-left
+  ctx.beginPath();
+  ctx.moveTo(qrCardX + bracketInset, qrCardY + bracketInset + bracketSize);
+  ctx.lineTo(qrCardX + bracketInset, qrCardY + bracketInset);
+  ctx.lineTo(qrCardX + bracketInset + bracketSize, qrCardY + bracketInset);
+  ctx.stroke();
+
+  // Top-right
+  ctx.beginPath();
+  ctx.moveTo(qrCardX + qrCardSize - bracketInset - bracketSize, qrCardY + bracketInset);
+  ctx.lineTo(qrCardX + qrCardSize - bracketInset, qrCardY + bracketInset);
+  ctx.lineTo(qrCardX + qrCardSize - bracketInset, qrCardY + bracketInset + bracketSize);
+  ctx.stroke();
+
+  // Bottom-left
+  ctx.beginPath();
+  ctx.moveTo(qrCardX + bracketInset, qrCardY + qrCardSize - bracketInset - bracketSize);
+  ctx.lineTo(qrCardX + bracketInset, qrCardY + qrCardSize - bracketInset);
+  ctx.lineTo(qrCardX + bracketInset + bracketSize, qrCardY + qrCardSize - bracketInset);
+  ctx.stroke();
+
+  // Bottom-right
+  ctx.beginPath();
+  ctx.moveTo(qrCardX + qrCardSize - bracketInset - bracketSize, qrCardY + qrCardSize - bracketInset);
+  ctx.lineTo(qrCardX + qrCardSize - bracketInset, qrCardY + qrCardSize - bracketInset);
+  ctx.lineTo(qrCardX + qrCardSize - bracketInset, qrCardY + qrCardSize - bracketInset - bracketSize);
+  ctx.stroke();
 
   // QR Code Image
-  const qrDataUrl = await generateQRDataURL(options.qrUrl, 500);
+  const qrDataUrl = await generateQRDataURL(options.qrUrl, 640);
   const img = new Image();
   await new Promise<void>((resolve, reject) => {
     img.onload = () => resolve();
@@ -174,62 +303,75 @@ export async function generateTableStandDataURL(options: StandCardOptions): Prom
     img.src = qrDataUrl;
   });
 
-  const qrInnerMargin = 35;
+  const qrInnerMargin = 60;
   const qrRenderSize = qrCardSize - qrInnerMargin * 2;
-  ctx.drawImage(img, qrCardX + qrInnerMargin, qrCardY + qrInnerMargin - 15, qrRenderSize, qrRenderSize);
+  ctx.drawImage(img, qrCardX + qrInnerMargin, qrCardY + qrInnerMargin - 20, qrRenderSize, qrRenderSize);
 
-  // Text under QR inside white card
+  // Call to Action Banner on QR Card
   ctx.fillStyle = '#0f172a';
-  ctx.font = '900 28px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-  ctx.fillText('SCAN WITH CAMERA OR SCANNER', width / 2, qrCardY + qrCardSize - 32);
+  ctx.font = '900 32px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.fillText('SCAN TO ORDER & PAY', width / 2, qrCardY + qrCardSize - 50);
+
+  // Supported scanning apps line
+  ctx.fillStyle = '#64748b';
+  ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.fillText('Works with any Camera  •  GPay  •  PhonePe  •  Paytm  •  UPI', width / 2, qrCardY + qrCardSize - 22);
 
   // 5. Instruction Steps
-  const stepsY = 1060;
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '800 28px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  const stepsY = 1320;
+  ctx.fillStyle = textColorPrimary;
+  ctx.font = '900 34px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
   ctx.fillText('HOW TO ORDER AT YOUR TABLE', width / 2, stepsY);
 
   const stepItems = [
-    { num: '1', text: 'Scan QR with any Camera or UPI App' },
-    { num: '2', text: 'Pick Pocket Pizzas, Starters & Add-ons' },
-    { num: '3', text: 'Pay Online or Cash • Sent directly to Kitchen' },
+    { num: '1', title: 'SCAN QR CODE', desc: 'Use your smartphone camera or any UPI scanner' },
+    { num: '2', title: 'CUSTOMIZE ORDER', desc: 'Select pocket pizzas, starters, crusts & beverages' },
+    { num: '3', title: 'INSTANT KITCHEN KOT', desc: 'Pay online or cash — sent straight to our chefs' },
   ];
 
-  ctx.font = '600 21px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
   stepItems.forEach((step, idx) => {
-    const itemY = stepsY + 50 + (idx * 44);
-    
-    // Number circle
-    const circleX = 140;
-    ctx.fillStyle = isCounter ? '#3b82f6' : '#f59e0b';
+    const itemY = stepsY + 65 + idx * 72;
+    const startX = 220;
+
+    // Number Circle
+    ctx.fillStyle = stepBadgeBg;
     ctx.beginPath();
-    ctx.arc(circleX, itemY - 7, 16, 0, Math.PI * 2);
+    ctx.arc(startX, itemY - 6, 26, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = '#0f172a';
-    ctx.font = '900 18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillText(step.num, circleX, itemY - 1);
+    ctx.fillStyle = stepBadgeText;
+    ctx.font = '900 24px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(step.num, startX, itemY + 3);
 
     // Step text
     ctx.textAlign = 'left';
-    ctx.fillStyle = '#e2e8f0';
-    ctx.font = '600 21px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillText(step.text, circleX + 30, itemY);
-    ctx.textAlign = 'center';
+    ctx.fillStyle = textColorPrimary;
+    ctx.font = '900 24px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillText(step.title, startX + 46, itemY - 14);
+
+    ctx.fillStyle = textColorSecondary;
+    ctx.font = '500 20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillText(step.desc, startX + 46, itemY + 14);
   });
 
-  // 6. Footer bar
-  const footerY = 1320;
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-  ctx.lineWidth = 1;
+  // 6. Security & Verification Footer
+  const footerY = 1680;
+  ctx.textAlign = 'center';
+  ctx.strokeStyle = theme === 'clean_minimal' ? 'rgba(0,0,0,0.1)' : 'rgba(255, 255, 255, 0.15)';
+  ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(80, footerY - 20);
-  ctx.lineTo(width - 80, footerY - 20);
+  ctx.moveTo(100, footerY - 25);
+  ctx.lineTo(width - 100, footerY - 25);
   ctx.stroke();
 
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-  ctx.font = '500 17px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-  ctx.fillText('🔒 Cryptographically Verified QR Session • starters4u.in', width / 2, footerY + 12);
+  ctx.fillStyle = textColorSecondary;
+  ctx.font = '700 20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.fillText('🔒 Cryptographically Verified Table Session  •  Authoritative Table UUID', width / 2, footerY + 10);
+
+  ctx.fillStyle = theme === 'clean_minimal' ? '#94a3b8' : 'rgba(255, 255, 255, 0.45)';
+  ctx.font = '600 18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.fillText('Powered by Starters4U Smart Restaurant Platform  •  starters4u.in', width / 2, footerY + 40);
 
   return canvas.toDataURL('image/png');
 }

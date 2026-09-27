@@ -11,6 +11,8 @@ import {
   ExternalLink,
   Layers,
   FileImage,
+  Palette,
+  CheckCircle2,
 } from 'lucide-react';
 import { generateSignedQRToken } from '../utils/qrSecurity';
 import {
@@ -18,52 +20,90 @@ import {
   downloadQRImage,
   downloadTableStandImage,
   generateTableStandDataURL,
+  StandCardTheme,
 } from '../utils/qrDownloadHelper';
 import { useRestaurant } from '../context/RestaurantContext';
 
+export interface TableItem {
+  id: string;
+  tableNumber?: string | number;
+  table_number?: string | number;
+  tableName?: string;
+  table_name?: string;
+  capacity?: number;
+}
+
 interface TableQRGeneratorModalProps {
-  tableCount: number;
-  initialSelectedTable?: number | 'counter';
+  tableCount?: number;
+  tables?: TableItem[];
+  initialSelectedTable?: number | 'counter' | string;
   restaurantName?: string;
   restaurantSlug?: string;
   restaurantTagline?: string;
+  initialViewMode?: 'stand_preview' | 'printable_all';
   onClose: () => void;
-  onTestScan?: (source: 'table_qr' | 'counter_qr', tableNumber?: string, token?: string) => void;
+  onTestScan?: (source: 'table_qr' | 'counter_qr', tableNumber?: string, token?: string, tableId?: string) => void;
 }
 
 export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
-  tableCount,
+  tableCount: propTableCount,
+  tables = [],
   initialSelectedTable = 1,
   restaurantName: propRestaurantName,
   restaurantSlug: propRestaurantSlug,
   restaurantTagline: propRestaurantTagline,
+  initialViewMode = 'stand_preview',
   onClose,
   onTestScan,
 }) => {
   const restaurantCtx = useRestaurant();
-  const activeRestaurantName = propRestaurantName || restaurantCtx?.restaurantName || 'Restaurant';
-  const activeTagline = propRestaurantTagline || restaurantCtx?.tagline || 'Dine-In • Express Takeaway • Online Ordering';
+  const activeRestaurantName = propRestaurantName || restaurantCtx?.restaurantName || 'Mozz Pizzateria';
+  const activeTagline = propRestaurantTagline || restaurantCtx?.tagline || 'Artisan Pocket Pizzas • Starters • Express Takeaway';
   const activeSlug = (propRestaurantSlug || restaurantCtx?.restaurantSlug || activeRestaurantName).replace(/[^a-zA-Z0-9_-]/g, '_');
 
-  const [selectedTarget, setSelectedTarget] = useState<number | 'counter'>(initialSelectedTable);
+  // Build unified table list
+  const resolvedTables: TableItem[] = tables.length > 0
+    ? tables
+    : Array.from({ length: propTableCount || 10 }, (_, i) => ({
+        id: `mock-table-${i + 1}`,
+        tableNumber: String(i + 1),
+        tableName: 'Main Dining',
+        capacity: 4,
+      }));
+
+  const [selectedTarget, setSelectedTarget] = useState<string | number | 'counter'>(initialSelectedTable);
+  const [selectedTheme, setSelectedTheme] = useState<StandCardTheme>('obsidian_gold');
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [standDataUrl, setStandDataUrl] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
   const [batchDownloading, setBatchDownloading] = useState<boolean>(false);
   const [batchProgress, setBatchProgress] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
-  const [viewMode, setViewMode] = useState<'stand_preview' | 'printable_all'>('stand_preview');
+  const [viewMode, setViewMode] = useState<'stand_preview' | 'printable_all'>(initialViewMode);
 
   // Compute active target details
   const isCounter = selectedTarget === 'counter';
-  const tableLabel = isCounter ? 'Counter Express' : `Table ${selectedTarget}`;
+  const matchedTable = !isCounter
+    ? resolvedTables.find((t) => String(t.tableNumber ?? t.table_number) === String(selectedTarget))
+    : undefined;
+
+  const currentTableNumber = isCounter
+    ? undefined
+    : matchedTable
+    ? String(matchedTable.tableNumber ?? matchedTable.table_number)
+    : String(selectedTarget);
+
+  const tableLabel = isCounter ? 'Counter Express' : `Table ${currentTableNumber}`;
+  const tableNameText = matchedTable ? matchedTable.tableName || matchedTable.table_name || 'Main Dining Area' : '';
   const orderMode = isCounter ? 'takeaway' : 'dine_in';
   const entrySource = isCounter ? 'counter_qr' : 'table_qr';
+  const authoritativeTableId = matchedTable?.id;
 
   const { token, fullCanonicalUrl } = generateSignedQRToken({
     mode: orderMode,
     source: entrySource,
-    tableNumber: isCounter ? undefined : `Table ${selectedTarget}`,
+    tableNumber: isCounter ? undefined : currentTableNumber,
+    tableId: authoritativeTableId,
     restaurantSlug: propRestaurantSlug || restaurantCtx?.restaurantSlug || 'mozz',
     restaurantId: restaurantCtx?.restaurant?.id,
   });
@@ -75,12 +115,14 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
 
     const loadGraphics = async () => {
       try {
-        const qrUrl = await generateQRDataURL(fullCanonicalUrl, 400);
+        const qrUrl = await generateQRDataURL(fullCanonicalUrl, 500);
         const standUrl = await generateTableStandDataURL({
           title: activeRestaurantName,
           subtitle: activeTagline,
           identifier: tableLabel,
+          tableName: tableNameText,
           qrUrl: fullCanonicalUrl,
+          theme: selectedTheme,
         });
 
         if (isMounted) {
@@ -99,11 +141,13 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [selectedTarget, fullCanonicalUrl, tableLabel, activeRestaurantName, activeTagline]);
+  }, [selectedTarget, selectedTheme, fullCanonicalUrl, tableLabel, tableNameText, activeRestaurantName, activeTagline]);
 
   // Handle single QR PNG download
   const handleDownloadQROnly = async () => {
-    const filename = isCounter ? `${activeSlug}_Counter_Takeaway_QR.png` : `${activeSlug}_Table_${selectedTarget}_QR.png`;
+    const filename = isCounter
+      ? `${activeSlug}_Counter_Takeaway_QR.png`
+      : `${activeSlug}_Table_${currentTableNumber}_QR.png`;
     await downloadQRImage(fullCanonicalUrl, filename, 1024);
   };
 
@@ -111,13 +155,15 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
   const handleDownloadStandCard = async () => {
     const filename = isCounter
       ? `${activeSlug}_Counter_Takeaway_Stand_Card.png`
-      : `${activeSlug}_Table_${selectedTarget}_Stand_Card.png`;
+      : `${activeSlug}_Table_${currentTableNumber}_Stand_Card.png`;
     await downloadTableStandImage(
       {
         title: activeRestaurantName,
         subtitle: activeTagline,
         identifier: tableLabel,
+        tableName: tableNameText,
         qrUrl: fullCanonicalUrl,
+        theme: selectedTheme,
       },
       filename
     );
@@ -141,20 +187,21 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
           subtitle: activeTagline,
           identifier: 'Counter Express',
           qrUrl: counterToken.fullCanonicalUrl,
+          theme: selectedTheme,
         },
         `${activeSlug}_Stand_Counter_Express.png`
       );
 
-      // Delay slightly between downloads so browser doesn't block multi-download
-      await new Promise((r) => setTimeout(r, 600));
-
       // 2. Download each Table
-      for (let i = 1; i <= tableCount; i++) {
-        setBatchProgress(`Generating Table ${i} Stand (${i} of ${tableCount})...`);
+      for (let i = 0; i < resolvedTables.length; i++) {
+        const tbl = resolvedTables[i];
+        const num = String(tbl.tableNumber ?? tbl.table_number ?? i + 1);
+        setBatchProgress(`Generating Table ${num} Stand (${i + 1} of ${resolvedTables.length})...`);
         const tGen = generateSignedQRToken({
           mode: 'dine_in',
           source: 'table_qr',
-          tableNumber: `Table ${i}`,
+          tableNumber: num,
+          tableId: tbl.id,
           restaurantSlug: propRestaurantSlug || restaurantCtx?.restaurantSlug || 'mozz',
           restaurantId: restaurantCtx?.restaurant?.id,
         });
@@ -162,12 +209,14 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
           {
             title: activeRestaurantName,
             subtitle: activeTagline,
-            identifier: `Table ${i}`,
+            identifier: `Table ${num}`,
+            tableName: tbl.tableName || tbl.table_name || 'Main Dining',
             qrUrl: tGen.fullCanonicalUrl,
+            theme: selectedTheme,
           },
-          `${activeSlug}_Stand_Table_${i}.png`
+          `${activeSlug}_Stand_Table_${num}.png`
         );
-        await new Promise((r) => setTimeout(r, 600));
+        await new Promise((r) => setTimeout(r, 400));
       }
 
       setBatchProgress('All table stand cards downloaded successfully!');
@@ -177,7 +226,6 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
       }, 2500);
     } catch (err) {
       console.error('Batch download error:', err);
-      alert('Batch download interrupted. Please try downloading individual cards or allow multiple downloads in browser settings.');
       setBatchDownloading(false);
       setBatchProgress('');
     }
@@ -189,7 +237,7 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-3 md:p-6 overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-2 md:p-6 overflow-y-auto">
       {/* Print-Only Stylesheet embedded */}
       <style>{`
         @media print {
@@ -218,22 +266,22 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
         }
       `}</style>
 
-      <div className="bg-white border border-slate-200 rounded-3xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden text-slate-800">
+      <div className="bg-white border border-slate-200 rounded-3xl max-w-5xl w-full max-h-[94vh] flex flex-col shadow-2xl overflow-hidden text-slate-800">
         {/* Header */}
-        <div className="p-4 md:p-5 border-b border-slate-200 flex items-center justify-between bg-slate-900 text-white shrink-0">
+        <div className="p-4 md:p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950 text-white shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center shadow-sm">
+            <div className="w-10 h-10 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center shadow-md font-black">
               <QrCode className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="text-lg font-black tracking-tight">Table QR Code & Stand Generator</h3>
-                <span className="px-2 py-0.5 rounded text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                  READY TO PRINT
+                <h3 className="text-base md:text-lg font-black tracking-tight">Table QR Code & Tent Stand Studio</h3>
+                <span className="px-2 py-0.5 rounded text-[10px] font-black bg-amber-400 text-slate-950">
+                  PRINT & ACRYLIC READY
                 </span>
               </div>
               <p className="text-xs text-slate-300">
-                Download high-res QR codes and acrylic tent stand graphics for table placement
+                Authoritative cryptographic Table UUID QR codes & tabletop tent cards with direct kitchen dispatch
               </p>
             </div>
           </div>
@@ -246,7 +294,7 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
           </button>
         </div>
 
-        {/* View Switcher / Tabs */}
+        {/* View Switcher & Toolbar */}
         <div className="bg-slate-100 border-b border-slate-200 px-4 py-2.5 flex items-center justify-between flex-wrap gap-2 shrink-0">
           <div className="flex items-center gap-2">
             <button
@@ -258,7 +306,7 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
               }`}
             >
               <FileImage className="w-3.5 h-3.5" />
-              <span>Stand Card Preview</span>
+              <span>Acrylic Stand Preview</span>
             </button>
             <button
               onClick={() => setViewMode('printable_all')}
@@ -269,7 +317,7 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
               }`}
             >
               <Layers className="w-3.5 h-3.5" />
-              <span>All Tables Print Sheet ({tableCount} Tables)</span>
+              <span>All Tables Print Grid ({resolvedTables.length} Tables)</span>
             </button>
           </div>
 
@@ -278,16 +326,16 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
               type="button"
               disabled={batchDownloading}
               onClick={handleDownloadAllTableStands}
-              className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-xs transition flex items-center gap-1.5 disabled:opacity-50"
+              className="px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-xs transition flex items-center gap-1.5 disabled:opacity-50"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>{batchDownloading ? 'Downloading...' : 'Download All Stands (Batch)'}</span>
+              <span>{batchDownloading ? 'Downloading...' : 'Batch Download All (PNG)'}</span>
             </button>
 
             <button
               type="button"
               onClick={handlePrint}
-              className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white shadow-xs transition flex items-center gap-1.5"
+              className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white shadow-xs transition flex items-center gap-1.5"
             >
               <Printer className="w-3.5 h-3.5" />
               <span>Print Sheet</span>
@@ -309,13 +357,64 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
         <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
           {viewMode === 'stand_preview' ? (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* Left Column: Table Selector & Actions */}
+              {/* Left Column: Table Selector, Themes & Actions */}
               <div className="lg:col-span-5 space-y-4">
+                {/* 1. Theme Palette Selector */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-black uppercase text-slate-500 flex items-center gap-1">
+                      <Palette className="w-3.5 h-3.5 text-amber-500" />
+                      <span>Standee Color Aesthetic</span>
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTheme('obsidian_gold')}
+                      className={`p-2 rounded-xl border text-xs font-bold transition flex flex-col items-center gap-1 text-center ${
+                        selectedTheme === 'obsidian_gold'
+                          ? 'border-amber-500 bg-slate-900 text-amber-300 ring-2 ring-amber-400/50'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="w-4 h-4 rounded-full bg-gradient-to-tr from-amber-500 to-amber-300" />
+                      <span>Obsidian Gold</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTheme('ruby_rose')}
+                      className={`p-2 rounded-xl border text-xs font-bold transition flex flex-col items-center gap-1 text-center ${
+                        selectedTheme === 'ruby_rose'
+                          ? 'border-rose-500 bg-rose-950 text-rose-300 ring-2 ring-rose-400/50'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="w-4 h-4 rounded-full bg-gradient-to-tr from-rose-500 to-amber-400" />
+                      <span>Mozz Ruby</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTheme('clean_minimal')}
+                      className={`p-2 rounded-xl border text-xs font-bold transition flex flex-col items-center gap-1 text-center ${
+                        selectedTheme === 'clean_minimal'
+                          ? 'border-slate-800 bg-slate-100 text-slate-900 ring-2 ring-slate-400/50'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="w-4 h-4 rounded-full bg-gradient-to-tr from-slate-200 to-white border border-slate-300" />
+                      <span>Cafe Minimal</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2. Target Table Selector */}
                 <div>
                   <label className="block text-xs font-black uppercase text-slate-500 mb-2">
                     Select Target Table / Counter
                   </label>
-                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto pr-1">
                     <button
                       type="button"
                       onClick={() => setSelectedTarget('counter')}
@@ -326,31 +425,40 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
                       }`}
                     >
                       <span className="text-base">🛍️</span>
-                      <span className="text-xs mt-1">Counter</span>
+                      <span className="text-xs mt-1 font-bold">Counter</span>
                     </button>
 
-                    {Array.from({ length: tableCount }, (_, i) => i + 1).map((tNum) => (
-                      <button
-                        key={tNum}
-                        type="button"
-                        onClick={() => setSelectedTarget(tNum)}
-                        className={`p-2.5 rounded-2xl border text-center transition flex flex-col items-center justify-center ${
-                          selectedTarget === tNum
-                            ? 'bg-amber-500 border-amber-500 text-slate-950 shadow-md font-extrabold'
-                            : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                        }`}
-                      >
-                        <span className="text-base">🍽️</span>
-                        <span className="text-xs mt-1">Table {tNum}</span>
-                      </button>
-                    ))}
+                    {resolvedTables.map((tbl) => {
+                      const num = String(tbl.tableNumber ?? tbl.table_number);
+                      const isSelected = String(selectedTarget) === num;
+                      return (
+                        <button
+                          key={tbl.id || num}
+                          type="button"
+                          onClick={() => setSelectedTarget(num)}
+                          className={`p-2.5 rounded-2xl border text-center transition flex flex-col items-center justify-center ${
+                            isSelected
+                              ? 'bg-amber-500 border-amber-500 text-slate-950 shadow-md font-extrabold'
+                              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                          }`}
+                        >
+                          <span className="text-base">🍽️</span>
+                          <span className="text-xs mt-1 font-bold">Table {num}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
                 {/* Target Information Card */}
                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-extrabold text-slate-900">{tableLabel}</span>
+                    <div>
+                      <span className="text-sm font-black text-slate-900">{tableLabel}</span>
+                      {tableNameText && (
+                        <p className="text-[11px] text-slate-500 font-medium">{tableNameText}</p>
+                      )}
+                    </div>
                     <span
                       className={`px-2 py-0.5 rounded text-[10px] font-black ${
                         isCounter
@@ -362,14 +470,21 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
                     </span>
                   </div>
 
+                  {authoritativeTableId && (
+                    <div className="text-[10px] font-mono text-slate-500 flex items-center gap-1 bg-white px-2 py-1 rounded-md border border-slate-200">
+                      <ShieldCheck className="w-3 h-3 text-emerald-600 shrink-0" />
+                      <span className="truncate">Table UUID: {authoritativeTableId}</span>
+                    </div>
+                  )}
+
                   <div className="text-xs text-slate-600 leading-relaxed">
                     {isCounter
-                      ? 'Place this stand at the main cashier/pickup counter. Customers scanning will be directed to Takeaway ordering.'
-                      : `Place this acrylic stand on ${tableLabel}. Customers scanning are cryptographically locked to ${tableLabel} Dine-In.`}
+                      ? 'Place this acrylic stand at the pickup counter. Customers scanning are routed to Takeaway ordering.'
+                      : `Place this acrylic stand on ${tableLabel}. Customers scanning are locked to ${tableLabel} Dine-In with automatic kitchen KOT delivery.`}
                   </div>
 
                   <div className="pt-2 border-t border-slate-200 space-y-1">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Signed Entry URL:</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Signed Secure URL:</span>
                     <div className="font-mono text-[10px] text-slate-700 bg-white p-2 rounded-xl border border-slate-200 break-all select-all">
                       {fullCanonicalUrl}
                     </div>
@@ -405,8 +520,9 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
                         onClick={() => {
                           onTestScan(
                             isCounter ? 'counter_qr' : 'table_qr',
-                            isCounter ? undefined : `Table ${selectedTarget}`,
-                            token
+                            isCounter ? undefined : currentTableNumber,
+                            token,
+                            authoritativeTableId
                           );
                           onClose();
                         }}
@@ -428,7 +544,7 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
                   <button
                     type="button"
                     onClick={handleDownloadStandCard}
-                    className="w-full py-3 px-4 rounded-2xl text-xs font-extrabold bg-gradient-to-r from-amber-500 to-rose-500 hover:from-amber-600 hover:to-rose-600 text-white shadow-md flex items-center justify-between transition group"
+                    className="w-full py-3 px-4 rounded-2xl text-xs font-extrabold bg-gradient-to-r from-amber-500 via-rose-500 to-amber-500 hover:from-amber-600 hover:to-rose-600 text-white shadow-md flex items-center justify-between transition group"
                   >
                     <div className="flex items-center gap-2">
                       <FileImage className="w-4 h-4" />
@@ -451,74 +567,158 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
                 </div>
               </div>
 
-              {/* Right Column: Live Table Stand Visual Preview */}
+              {/* Right Column: Live Table Stand Visual Mockup */}
               <div className="lg:col-span-7 flex flex-col items-center">
-                <div className="w-full max-w-sm bg-slate-900 text-white rounded-3xl p-5 shadow-2xl border-4 border-slate-800 relative overflow-hidden">
-                  {loading ? (
-                    <div className="aspect-[1/1.4] flex items-center justify-center text-slate-400 text-xs">
-                      Generating High-Res Stand Card Preview...
-                    </div>
-                  ) : (
-                    <div className="space-y-4 text-center">
-                      {/* Top Badge */}
-                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-amber-400 text-slate-950 shadow-sm mx-auto">
-                        <ShieldCheck className="w-3.5 h-3.5" />
-                        <span>{isCounter ? '🛍️ EXPRESS TAKEAWAY' : '🍽️ DINE-IN SERVICE'}</span>
-                      </div>
+                {/* Physical Tent Card Mockup Frame */}
+                <div className="w-full max-w-sm relative">
+                  {/* Stand Shadow & Pedestal */}
+                  <div className="absolute -bottom-3 inset-x-8 h-4 bg-black/40 blur-md rounded-full" />
 
-                      {/* Header */}
-                      <div>
-                        <h4 className="text-xl font-black tracking-tight text-white uppercase">{activeRestaurantName}</h4>
-                        <p className="text-[11px] text-amber-300 font-medium">
-                          {activeTagline}
-                        </p>
-                      </div>
+                  {/* Acrylic Card Body */}
+                  <div
+                    className={`rounded-3xl p-5 shadow-2xl border-4 relative overflow-hidden transition-all duration-300 ${
+                      selectedTheme === 'clean_minimal'
+                        ? 'bg-gradient-to-b from-white via-slate-50 to-slate-100 text-slate-900 border-slate-300'
+                        : selectedTheme === 'ruby_rose'
+                        ? 'bg-gradient-to-b from-[#3b0714] via-[#1c1917] to-[#09090b] text-white border-rose-900/60'
+                        : 'bg-gradient-to-b from-[#0b0f19] via-[#151928] to-[#07090e] text-white border-amber-900/50'
+                    }`}
+                  >
+                    {/* Corner Accent Flourishes */}
+                    <div className="absolute top-2 left-2 w-4 h-4 border-t-2 border-l-2 border-amber-400/80 rounded-tl-sm pointer-events-none" />
+                    <div className="absolute top-2 right-2 w-4 h-4 border-t-2 border-r-2 border-amber-400/80 rounded-tr-sm pointer-events-none" />
+                    <div className="absolute bottom-2 left-2 w-4 h-4 border-b-2 border-l-2 border-amber-400/80 rounded-bl-sm pointer-events-none" />
+                    <div className="absolute bottom-2 right-2 w-4 h-4 border-b-2 border-r-2 border-amber-400/80 rounded-br-sm pointer-events-none" />
 
-                      {/* Big Table Badge */}
-                      <div className="bg-gradient-to-r from-amber-500/20 via-rose-500/20 to-amber-500/20 border border-amber-400/60 rounded-2xl py-2 px-4">
-                        <div className="text-2xl font-black text-white tracking-wider">
-                          {tableLabel.toUpperCase()}
+                    {loading ? (
+                      <div className="aspect-[1/1.4] flex items-center justify-center text-slate-400 text-xs">
+                        Generating High-Res Stand Card Preview...
+                      </div>
+                    ) : (
+                      <div className="space-y-3.5 text-center">
+                        {/* Top Service Pill */}
+                        <div
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black shadow-sm mx-auto ${
+                            selectedTheme === 'clean_minimal'
+                              ? 'bg-slate-900 text-white'
+                              : selectedTheme === 'ruby_rose'
+                              ? 'bg-rose-500 text-white'
+                              : 'bg-amber-400 text-slate-950'
+                          }`}
+                        >
+                          <ShieldCheck className="w-3 h-3" />
+                          <span>{isCounter ? '🛍️  EXPRESS TAKEAWAY  🛍️' : '🍽️  CONTACTLESS DINE-IN  🍽️'}</span>
                         </div>
-                        <div className="text-[10px] text-slate-300">
-                          {isCounter ? 'Packed for takeaway pickup' : 'Direct Kitchen KOT & Table Service'}
-                        </div>
-                      </div>
 
-                      {/* QR Display Card */}
-                      <div className="bg-white rounded-2xl p-4 shadow-lg mx-auto max-w-[240px]">
-                        {qrDataUrl ? (
-                          <img
-                            src={qrDataUrl}
-                            alt={`QR for ${tableLabel}`}
-                            className="w-full aspect-square object-contain mx-auto"
-                          />
-                        ) : (
-                          <div className="aspect-square bg-slate-100 rounded-xl flex items-center justify-center">
-                            <QrCode className="w-12 h-12 text-slate-400" />
+                        {/* Restaurant Branding Header */}
+                        <div>
+                          <h4 className="text-xl font-black tracking-tight uppercase">
+                            {activeRestaurantName}
+                          </h4>
+                          <p
+                            className={`text-[10px] font-semibold tracking-wide ${
+                              selectedTheme === 'clean_minimal' ? 'text-slate-500' : 'text-amber-300'
+                            }`}
+                          >
+                            {activeTagline}
+                          </p>
+                        </div>
+
+                        {/* Table Indicator Plaque */}
+                        <div
+                          className={`rounded-2xl py-2 px-3 border shadow-inner ${
+                            selectedTheme === 'clean_minimal'
+                              ? 'bg-slate-50 border-slate-200'
+                              : selectedTheme === 'ruby_rose'
+                              ? 'bg-rose-950/40 border-rose-500/40'
+                              : 'bg-amber-500/15 border-amber-400/40'
+                          }`}
+                        >
+                          <div className="text-2xl font-black tracking-wider uppercase">
+                            {tableLabel}
                           </div>
-                        )}
-                        <div className="text-[10px] font-black text-slate-900 mt-2 uppercase tracking-wide">
-                          SCAN WITH CAMERA OR SCANNER
+                          <div
+                            className={`text-[10px] font-bold ${
+                              selectedTheme === 'clean_minimal' ? 'text-slate-600' : 'text-slate-300'
+                            }`}
+                          >
+                            {isCounter
+                              ? 'Place orders for express counter takeaway'
+                              : `${tableNameText ? `${tableNameText} • ` : ''}Direct Kitchen KOT & Table Delivery`}
+                          </div>
+                        </div>
+
+                        {/* White QR Code Card with Corner Brackets */}
+                        <div className="bg-white rounded-2xl p-3.5 shadow-xl mx-auto max-w-[240px] relative">
+                          {/* Corner scan brackets */}
+                          <div className="absolute top-2 left-2 w-3.5 h-3.5 border-t-2 border-l-2 border-amber-500 rounded-tl-xs pointer-events-none" />
+                          <div className="absolute top-2 right-2 w-3.5 h-3.5 border-t-2 border-r-2 border-amber-500 rounded-tr-xs pointer-events-none" />
+                          <div className="absolute bottom-2 left-2 w-3.5 h-3.5 border-b-2 border-l-2 border-amber-500 rounded-bl-xs pointer-events-none" />
+                          <div className="absolute bottom-2 right-2 w-3.5 h-3.5 border-b-2 border-r-2 border-amber-500 rounded-br-xs pointer-events-none" />
+
+                          {qrDataUrl ? (
+                            <img
+                              src={qrDataUrl}
+                              alt={`QR for ${tableLabel}`}
+                              className="w-full aspect-square object-contain mx-auto"
+                            />
+                          ) : (
+                            <div className="aspect-square bg-slate-100 rounded-xl flex items-center justify-center">
+                              <QrCode className="w-12 h-12 text-slate-400" />
+                            </div>
+                          )}
+
+                          <div className="text-[10px] font-black text-slate-900 mt-2 uppercase tracking-wide">
+                            SCAN TO ORDER & PAY
+                          </div>
+                          <div className="text-[8px] font-bold text-slate-400">
+                            Camera • GPay • PhonePe • Paytm • UPI
+                          </div>
+                        </div>
+
+                        {/* 3 Step Ordering Guide */}
+                        <div
+                          className={`rounded-xl p-2.5 text-left text-[10px] space-y-1 border ${
+                            selectedTheme === 'clean_minimal'
+                              ? 'bg-slate-50 border-slate-200 text-slate-700'
+                              : 'bg-black/30 border-white/10 text-slate-200'
+                          }`}
+                        >
+                          <div className="font-bold text-amber-400 text-[9px] uppercase">
+                            How to order at your table:
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-3.5 h-3.5 rounded-full bg-amber-400 text-slate-950 font-black text-[8px] flex items-center justify-center shrink-0">
+                              1
+                            </span>
+                            <span>Scan with phone camera or UPI app</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-3.5 h-3.5 rounded-full bg-amber-400 text-slate-950 font-black text-[8px] flex items-center justify-center shrink-0">
+                              2
+                            </span>
+                            <span>Customize Pocket Pizzas & Starters</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-3.5 h-3.5 rounded-full bg-amber-400 text-slate-950 font-black text-[8px] flex items-center justify-center shrink-0">
+                              3
+                            </span>
+                            <span>Pay online or cash • Sent to kitchen KOT</span>
+                          </div>
+                        </div>
+
+                        {/* Security Footer */}
+                        <div className="text-[8px] text-slate-400 pt-0.5 flex items-center justify-center gap-1">
+                          <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400 inline" />
+                          <span>Cryptographically Verified Session • starters4u.in</span>
                         </div>
                       </div>
-
-                      {/* Ordering Steps */}
-                      <div className="bg-slate-800/80 rounded-xl p-2.5 text-left text-[11px] space-y-1 text-slate-200 border border-slate-700">
-                        <div className="font-bold text-amber-400 text-[10px] uppercase">3 Easy Steps:</div>
-                        <div>1. Scan with phone camera or UPI app</div>
-                        <div>2. Customize Pocket Pizzas & Starters</div>
-                        <div>3. Instant dispatch to Kitchen KOT</div>
-                      </div>
-
-                      <div className="text-[9px] text-slate-400 pt-1">
-                        🔒 Verified QR Session • starters4u.in
-                      </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
 
-                <div className="mt-3 text-[11px] text-slate-500 text-center">
-                  💡 Tip: Print on standard 5"x7" or A6 acrylic stands for display on dining tables.
+                <div className="mt-4 text-[11px] text-slate-500 text-center">
+                  💡 Tip: Standard 5"x7" or 4"x6" acrylic stands protect these cards and display crisply on dining tables.
                 </div>
               </div>
             </div>
@@ -529,7 +729,7 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
                 <div>
                   <h4 className="text-sm font-bold text-slate-900">Multi-Table Print Grid</h4>
                   <p className="text-xs text-slate-500">
-                    Showing all {tableCount} tables + Counter Express. Ready for batch printing.
+                    Showing all {resolvedTables.length} registered tables + Counter Express. Ready for batch printing.
                   </p>
                 </div>
                 <button
@@ -564,18 +764,21 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
                 })()}
 
                 {/* Table Cards */}
-                {Array.from({ length: tableCount }, (_, idx) => idx + 1).map((tNum) => {
+                {resolvedTables.map((tbl) => {
+                  const num = String(tbl.tableNumber ?? tbl.table_number);
                   const { fullCanonicalUrl: tUrl } = generateSignedQRToken({
                     mode: 'dine_in',
                     source: 'table_qr',
-                    tableNumber: `Table ${tNum}`,
+                    tableNumber: num,
+                    tableId: tbl.id,
                     restaurantSlug: propRestaurantSlug || restaurantCtx?.restaurantSlug || 'mozz',
                     restaurantId: restaurantCtx?.restaurant?.id,
                   });
                   return (
                     <PrintableMiniCard
-                      key={tNum}
-                      identifier={`Table ${tNum}`}
+                      key={tbl.id || num}
+                      identifier={`Table ${num}`}
+                      tableName={tbl.tableName || tbl.table_name}
                       isCounter={false}
                       qrUrl={tUrl}
                       restaurantName={activeRestaurantName}
@@ -609,35 +812,51 @@ export const TableQRGeneratorModal: React.FC<TableQRGeneratorModalProps> = ({
 // Mini Card Component for multi-table print grid
 const PrintableMiniCard: React.FC<{
   identifier: string;
+  tableName?: string;
   isCounter: boolean;
   qrUrl: string;
   restaurantName?: string;
   restaurantTagline?: string;
-}> = ({ identifier, isCounter, qrUrl, restaurantName = 'Restaurant', restaurantTagline = 'Dine-In • Express Takeaway' }) => {
+}> = ({
+  identifier,
+  tableName,
+  isCounter,
+  qrUrl,
+  restaurantName = 'Restaurant',
+  restaurantTagline = 'Dine-In • Express Takeaway',
+}) => {
   const [dataUrl, setDataUrl] = useState<string>('');
 
   useEffect(() => {
-    generateQRDataURL(qrUrl, 260)
+    generateQRDataURL(qrUrl, 320)
       .then((url) => setDataUrl(url))
       .catch((e) => console.error(e));
   }, [qrUrl]);
 
   return (
-    <div className="bg-white border-2 border-slate-900 rounded-2xl p-4 text-center space-y-3 flex flex-col justify-between shadow-xs page-break">
+    <div className="bg-white border-2 border-slate-900 rounded-3xl p-5 text-center space-y-3 flex flex-col justify-between shadow-xs page-break">
       <div>
-        <div className="text-[10px] font-black uppercase tracking-widest text-rose-600 truncate">
-          🍽️ {restaurantName.toUpperCase()} 🥢
+        <div className="inline-block px-2.5 py-0.5 rounded-full bg-slate-100 text-[10px] font-black uppercase tracking-wider text-slate-700">
+          {isCounter ? '🛍️ Takeaway Pickup' : '🍽️ Tabletop QR'}
         </div>
-        <div className="text-xs font-black text-slate-900 mt-0.5 truncate">
+        <div className="text-sm font-black text-slate-950 mt-1 uppercase truncate">
+          {restaurantName}
+        </div>
+        <div className="text-[10px] text-slate-500 font-medium truncate">
           {restaurantTagline}
         </div>
 
-        <div className="my-2 py-1.5 px-3 bg-slate-900 text-white rounded-xl font-black text-base tracking-wider">
+        <div className="my-2 py-2 px-3 bg-slate-900 text-white rounded-2xl font-black text-lg tracking-wider">
           {identifier.toUpperCase()}
         </div>
+        {tableName && (
+          <div className="text-[10px] text-slate-500 font-bold -mt-1">
+            {tableName}
+          </div>
+        )}
       </div>
 
-      <div className="w-36 h-36 mx-auto bg-white p-1 rounded-xl border border-slate-200 flex items-center justify-center">
+      <div className="w-40 h-40 mx-auto bg-white p-2 rounded-2xl border-2 border-slate-200 flex items-center justify-center shadow-xs">
         {dataUrl ? (
           <img src={dataUrl} alt={identifier} className="w-full h-full object-contain" />
         ) : (
@@ -646,14 +865,14 @@ const PrintableMiniCard: React.FC<{
       </div>
 
       <div>
-        <div className="text-[10px] font-black text-slate-900 uppercase">
-          SCAN TO ORDER
+        <div className="text-[11px] font-black text-slate-900 uppercase">
+          SCAN TO ORDER & PAY
         </div>
         <div className="text-[9px] text-slate-500 mt-0.5">
           {isCounter ? 'Orders packed for takeaway' : 'Direct Kitchen KOT & Table Delivery'}
         </div>
         <div className="text-[8px] text-slate-400 mt-1">
-          starters4u.in
+          🔒 Cryptographically Signed • starters4u.in
         </div>
       </div>
     </div>

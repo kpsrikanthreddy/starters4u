@@ -388,21 +388,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               console.warn('Server QR validation check:', err);
             });
         } else {
-          const rawTable = searchParams.get('table') || searchParams.get('tableNumber');
-          const mode = searchParams.get('mode');
-          if (rawTable || mode === 'dine_in') {
-            const cleanTable = rawTable ? `Table ${rawTable.replace(/^Table\s*/i, '').trim()}` : 'Table 1';
-            setTableNumberState(cleanTable);
-            setOrderTypeState('dine_in');
-            setQrSession({
-              source: 'table_qr',
-              orderMode: 'dine_in',
-              tableNumber: cleanTable,
-              isVerified: true,
-              isModeLocked: true,
-              verificationMessage: `Verified ${cleanTable} • Dine-In Session`,
-            });
-          }
+          // Normal website browsing: default to standard delivery and prevent unverified Dine-In
+          setQrSession((prev) => {
+            if (prev.source === 'table_qr' && prev.isVerified) return prev;
+            return {
+              source: 'online_web',
+              orderMode: 'delivery',
+              isVerified: false,
+              isModeLocked: false,
+              verificationMessage: 'Online Customer Web Session',
+            };
+          });
+          setOrderTypeState((prev) => (prev === 'dine_in' ? 'delivery' : prev));
         }
       };
 
@@ -415,6 +412,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const setOrderType = (type: OrderType) => {
     if (isModeLocked) {
       console.warn(`Order mode is locked to ${qrSession.orderMode} (${qrSession.source}) by verified QR scan.`);
+      return;
+    }
+    // Dine-In is strictly forbidden unless customer entered via verified Table QR
+    if (type === 'dine_in' && (qrSession.source !== 'table_qr' || !qrSession.isVerified)) {
+      console.warn('Dine-In is only allowed when ordering from a verified restaurant Table QR code.');
       return;
     }
     setOrderTypeState(type);

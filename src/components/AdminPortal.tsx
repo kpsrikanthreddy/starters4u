@@ -2515,12 +2515,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ onBackToMenu }) => {
           tableCount={tableCount}
           initialSelectedTable={selectedQRTarget}
           onClose={() => setShowQRDownloadModal(false)}
-          onTestScan={(source, tNum, token) => {
+          onTestScan={(source, tNum, token, tId) => {
             switchQRSession({
               source,
               orderMode: source === 'counter_qr' ? 'takeaway' : 'dine_in',
               tableNumber: tNum,
               token,
+              tableId: tId,
             });
             onBackToMenu();
           }}

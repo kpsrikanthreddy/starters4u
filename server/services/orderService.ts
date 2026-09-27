@@ -282,10 +282,18 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
   } else {
     // Direct Online Web / Manual entries (DO NOT TRUST RAW QUERY PARAMS AS TABLE_QR!)
     if (orderType === 'dine_in') {
-      if (!tableNumber) {
-        throw new Error('Dine-In orders require a verified Table QR session or valid table number.');
+      const isStaffOrPos =
+        entrySource === 'pos_counter' ||
+        entrySource === 'restaurant_admin' ||
+        entrySource === 'staff_app' ||
+        payload.entrySource === 'pos_counter' ||
+        payload.entrySource === 'restaurant_admin' ||
+        payload.entrySource === 'staff_app';
+
+      if (!isStaffOrPos) {
+        throw new Error('Dine-In orders are only permitted through a verified Table QR scan. Please scan the QR code on your dining table.');
       }
-      entrySource = 'customer_web'; // Unsigned query parameters are strictly customer_web, never table_qr
+      entrySource = 'pos_counter';
     } else if (orderType === 'counter') {
       entrySource = 'pos_counter';
     } else if (orderType === 'takeaway') {
@@ -305,14 +313,14 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
       try {
         if (tableId) {
           const tRes = await query(
-            `SELECT id, table_number, table_name, branch_id FROM restaurant_tables WHERE id = $1 AND restaurant_id = $2 LIMIT 1`,
+            `SELECT id, table_number, table_name, branch_id, is_active FROM restaurant_tables WHERE id = $1 AND restaurant_id = $2 LIMIT 1`,
             [tableId, restaurantId]
           );
           if (tRes.rows.length > 0) resolvedTable = tRes.rows[0];
         }
         if (!resolvedTable && rawNum) {
           const tRes = await query(
-            `SELECT id, table_number, table_name, branch_id FROM restaurant_tables WHERE restaurant_id = $1 AND table_number = $2 LIMIT 1`,
+            `SELECT id, table_number, table_name, branch_id, is_active FROM restaurant_tables WHERE restaurant_id = $1 AND table_number = $2 LIMIT 1`,
             [restaurantId, rawNum]
           );
           if (tRes.rows.length > 0) resolvedTable = tRes.rows[0];
@@ -330,14 +338,18 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
       );
     }
 
-    if (resolvedTable) {
-      tableId = resolvedTable.id;
-      tableNumber = `Table ${resolvedTable.table_number}`;
-      if (resolvedTable.branch_id && !branchId) {
-        branchId = resolvedTable.branch_id;
-      }
-    } else {
-      tableNumber = `Table ${rawNum}`;
+    if (!resolvedTable) {
+      throw new Error(`Dine-In table is invalid or does not belong to this restaurant.`);
+    }
+
+    if (resolvedTable.is_active === false) {
+      throw new Error(`Table ${resolvedTable.table_number} is currently inactive and cannot accept Dine-In orders.`);
+    }
+
+    tableId = resolvedTable.id;
+    tableNumber = `Table ${resolvedTable.table_number}`;
+    if (resolvedTable.branch_id && !branchId) {
+      branchId = resolvedTable.branch_id;
     }
   }
 

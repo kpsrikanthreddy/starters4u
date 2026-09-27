@@ -17,13 +17,14 @@ import {
   RestaurantCard,
   PublicRestaurantCardItem,
 } from '../../components/marketplace/RestaurantCard';
+import { INITIAL_MARKETPLACE_RESTAURANTS } from '../../data/fallbackRestaurants';
 
 interface MarketplaceHomeProps {
   onNavigate: (path: string) => void;
 }
 
 export const MarketplaceHome: React.FC<MarketplaceHomeProps> = ({ onNavigate }) => {
-  const [restaurants, setRestaurants] = useState<PublicRestaurantCardItem[]>([]);
+  const [restaurants, setRestaurants] = useState<PublicRestaurantCardItem[]>(INITIAL_MARKETPLACE_RESTAURANTS);
   const [categories, setCategories] = useState<string[]>([
     'All',
     'Chinese',
@@ -37,7 +38,7 @@ export const MarketplaceHome: React.FC<MarketplaceHomeProps> = ({ onNavigate }) 
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [selectedLocality, setSelectedLocality] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchRestaurants = useCallback(async () => {

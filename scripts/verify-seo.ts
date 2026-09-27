@@ -319,9 +319,15 @@ async function verifySeoBuild() {
   }
 
   try {
-    // 1. GET / -> 200 OK
+    // 1. GET / -> 200 OK (Must render Starters4U Marketplace Homepage, NOT old MOZZ homepage)
     const resRoot = await testHttp('/');
     assert(resRoot.statusCode === 200, 'GET / returns HTTP 200 directly');
+    assert(resRoot.body.includes('Multi-Restaurant Food Platform') || resRoot.body.includes('Top Local Kitchens') || resRoot.body.includes('Explore by Cuisine'), 'GET / renders Starters4U Multi-Restaurant Marketplace');
+    assert(!resRoot.body.includes('Introducing Korean-Style Pocket Pizzas') && !resRoot.body.includes('Freshly Baked. Loaded with Love'), 'GET / does NOT render old MOZZ-only homepage');
+
+    // 1b. GET /restaurants -> 200 OK
+    const resRestaurants = await testHttp('/restaurants');
+    assert(resRestaurants.statusCode === 200, 'GET /restaurants returns HTTP 200 directly');
 
     // 2. GET /menu -> 200 OK
     const resMenu = await testHttp('/menu');

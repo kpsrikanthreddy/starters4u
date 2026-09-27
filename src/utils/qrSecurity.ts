@@ -224,24 +224,25 @@ export function resolveEntrySourceFromLocation(location: {
     }
   }
 
-  // 2. Unsigned Legacy URL / Direct Manual Query Parameter (DO NOT TRUST RAW QUERY PARAMS!)
-  // Changing ?table=3 to ?table=8 does NOT gain verified table_qr context!
+  // 2. Unsigned Legacy URL / Direct Manual Query Parameter (DO NOT TRUST RAW QUERY PARAMS AS TABLE_QR!)
+  // Changing ?table=3 to ?table=8 or adding ?mode=dine_in does NOT gain verified table_qr context!
+  // Dine-In is strictly reserved for verified Table QR tokens.
   const rawTableParam = searchParams.get('table') || searchParams.get('tableNumber');
   const tablePathMatch = pathname.match(/(?:table|r\/[^/]+\/table)\/([^/?#]+)/i);
   const rawTable = rawTableParam || (tablePathMatch ? decodeURIComponent(tablePathMatch[1]) : undefined);
   const isDineInParam = searchParams.get('mode') === 'dine_in' || pathname.includes('/dine_in');
 
   if (rawTable || isDineInParam) {
-    const cleanTable = rawTable ? `Table ${rawTable.replace(/^Table\s*/i, '').trim()}` : 'Table 1';
+    // Unsigned table query parameters do NOT grant Dine-In context
     return {
-      source: 'customer_web', // NOT table_qr because it lacks cryptographic signature
-      orderMode: 'dine_in',
-      tableNumber: cleanTable,
+      source: 'online_web',
+      orderMode: 'delivery',
+      tableNumber: undefined,
       token: undefined,
-      isVerified: false, // Explicitly UNVERIFIED
+      isVerified: false,
       isModeLocked: false,
-      isTableLocked: false, // Customer may change table because context is manual/unverified
-      verificationMessage: `Manual Table Selection (${cleanTable}) • Unsigned Web Session`,
+      isTableLocked: false,
+      verificationMessage: 'Unsigned URL: Dine-In requires a verified Table QR scan. Defaulted to standard Delivery.',
     };
   }
 

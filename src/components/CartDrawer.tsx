@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../context/StoreContext';
 import { useRestaurant } from '../context/RestaurantContext';
 import {
@@ -78,9 +78,83 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
     promptCustomerVerification,
   } = useStore();
 
+  // Dine-In is strictly available ONLY when entered via verified Table QR
+  const isDineInAllowed = qrSession.source === 'table_qr' && Boolean(qrSession.isVerified);
+
+  // If normal website user somehow had orderType === 'dine_in', fallback immediately to delivery
+  useEffect(() => {
+    if (!isDineInAllowed && orderType === 'dine_in') {
+      setOrderType('delivery');
+    }
+  }, [isDineInAllowed, orderType, setOrderType]);
+
   const [couponInput, setCouponInput] = useState('');
   const [couponError, setCouponError] = useState('');
   const [validationError, setValidationError] = useState('');
+
+  // Per-field inline error messages
+  const [fieldErrors, setFieldErrors] = useState<{
+    name?: string;
+    phone?: string;
+    address?: string;
+    location?: string;
+    table?: string;
+  }>({});
+
+  // Element Refs for Auto-Scroll & Auto-Focus UX
+  const cartScrollContainerRef = useRef<HTMLDivElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const mobileInputRef = useRef<HTMLInputElement>(null);
+  const addressInputRef = useRef<HTMLTextAreaElement>(null);
+  const locationSectionRef = useRef<HTMLDivElement>(null);
+  const locationButtonRef = useRef<HTMLButtonElement>(null);
+  const tableNumberInputRef = useRef<HTMLInputElement>(null);
+
+  // Reusable helper to focus and scroll first invalid field
+  const focusFirstInvalidField = (
+    field: 'name' | 'phone' | 'address' | 'location' | 'table',
+    errorMessage: string
+  ) => {
+    setFieldErrors({
+      name: field === 'name' ? errorMessage : '',
+      phone: field === 'phone' ? errorMessage : '',
+      address: field === 'address' ? errorMessage : '',
+      location: field === 'location' ? errorMessage : '',
+      table: field === 'table' ? errorMessage : '',
+    });
+    setValidationError(errorMessage);
+
+    let targetEl: HTMLElement | null = null;
+    if (field === 'name') targetEl = nameInputRef.current;
+    else if (field === 'phone') targetEl = mobileInputRef.current;
+    else if (field === 'address') targetEl = addressInputRef.current;
+    else if (field === 'location') targetEl = locationButtonRef.current || locationSectionRef.current;
+    else if (field === 'table') targetEl = tableNumberInputRef.current;
+
+    if (targetEl && cartScrollContainerRef.current) {
+      const container = cartScrollContainerRef.current;
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = targetEl.getBoundingClientRect();
+      // Scroll to position with top clearance, ensuring the field stays well above the sticky footer
+      const scrollOffset = targetRect.top - containerRect.top + container.scrollTop - 70;
+
+      container.scrollTo({
+        top: Math.max(0, scrollOffset),
+        behavior: 'smooth',
+      });
+
+      // Move input/keyboard focus
+      setTimeout(() => {
+        if (targetEl) {
+          targetEl.focus({ preventScroll: true });
+          if (targetEl instanceof HTMLInputElement || targetEl instanceof HTMLTextAreaElement) {
+            const len = targetEl.value.length;
+            targetEl.setSelectionRange?.(len, len);
+          }
+        }
+      }, 150);
+    }
+  };
 
   // GPS state
   const [isLocating, setIsLocating] = useState(false);
@@ -187,6 +261,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
 
   const handleProceedToPayment = () => {
     setValidationError('');
+    setFieldErrors({});
 
     if (isSuspended) {
       setValidationError(`${restaurant?.name || 'This restaurant'} is temporarily suspended and cannot accept orders.`);
@@ -198,39 +273,30 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
       return;
     }
 
-    const isVerified = promptCustomerVerification(() => {
-      if (orderType === 'delivery') {
-        if (!customerDetails.address?.trim()) {
-          setValidationError('Please enter your delivery street address (Flat / House / Street).');
-          return;
-        }
-        if (
-          typeof customerDetails.latitude !== 'number' ||
-          typeof customerDetails.longitude !== 'number' ||
-          isNaN(customerDetails.latitude) ||
-          isNaN(customerDetails.longitude)
-        ) {
-          setValidationError('Delivery orders require your verified GPS location. Tap "Use My Current Location" or select your delivery area.');
-          return;
-        }
-      }
-      onOpenCheckout();
-    });
-
-    if (!isVerified) {
+    // 1. Customer Name (All orders)
+    const nameVal = (customerDetails.name || '').trim();
+    if (!nameVal) {
+      focusFirstInvalidField('name', 'Please enter your full name');
       return;
     }
 
-    const cleanPhone = (customerDetails.phone || '').trim().replace(/\D/g, '');
-    if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
-      setValidationError('Please enter a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9).');
-      promptCustomerVerification();
+    // 2. Mobile Number (All orders)
+    const phoneRaw = (customerDetails.phone || '').trim();
+    const phoneDigits = phoneRaw.replace(/\D/g, '');
+    if (!phoneDigits) {
+      focusFirstInvalidField('phone', 'Please enter your 10-digit mobile number');
+      return;
+    }
+    if (!/^[6-9]\d{9}$/.test(phoneDigits)) {
+      focusFirstInvalidField('phone', 'Please enter a valid 10-digit mobile number');
       return;
     }
 
+    // 3. For Delivery: Address & Verified GPS Location
     if (orderType === 'delivery') {
-      if (!customerDetails.address?.trim()) {
-        setValidationError('Please enter your delivery street address (Flat / House / Street).');
+      const addressVal = (customerDetails.address || '').trim();
+      if (!addressVal) {
+        focusFirstInvalidField('address', 'Please enter your delivery street address (Flat / House / Street).');
         return;
       }
       if (
@@ -239,11 +305,24 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
         isNaN(customerDetails.latitude) ||
         isNaN(customerDetails.longitude)
       ) {
-        setValidationError('Delivery orders require your verified GPS location. Tap "Use My Current Location" or select your delivery area.');
+        focusFirstInvalidField(
+          'location',
+          'Delivery orders require your verified GPS location. Tap "Use My Current Location" or select an area.'
+        );
         return;
       }
     }
 
+    // 4. For Dine-In: Table Number
+    if (orderType === 'dine_in') {
+      const tableVal = (tableNumber || '').trim();
+      if (!tableVal) {
+        focusFirstInvalidField('table', 'Please enter or select a valid table number.');
+        return;
+      }
+    }
+
+    // All validation passed! Open checkout/Razorpay safely without duplicate attempts
     onOpenCheckout();
   };
 
@@ -305,7 +384,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
           </div>
 
           {/* Cart Scrollable Area */}
-          <div className="flex-1 overflow-y-auto p-5 space-y-6">
+          <div ref={cartScrollContainerRef} className="flex-1 overflow-y-auto p-5 space-y-6">
             {cart.length === 0 ? (
               <div className="h-64 flex flex-col items-center justify-center text-center p-6 bg-slate-50 rounded-3xl border border-slate-100">
                 <div className="w-16 h-16 rounded-full bg-white border border-slate-200 flex items-center justify-center text-3xl mb-3 shadow-xs">
@@ -364,8 +443,9 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
                       </div>
                       <span className="text-[10px] text-slate-400 font-medium">Customer Selection</span>
                     </div>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {(['delivery', 'takeaway', 'dine_in'] as OrderType[]).map((type) => (
+                    {/* Normal website orders only show Delivery + Takeaway. Dine-In is strictly hidden unless customer scanned a verified Table QR. */}
+                    <div className={`grid ${isDineInAllowed ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5`}>
+                      {(isDineInAllowed ? (['delivery', 'takeaway', 'dine_in'] as OrderType[]) : (['delivery', 'takeaway'] as OrderType[])).map((type) => (
                         <button
                           key={type}
                           type="button"
@@ -386,18 +466,33 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
                       ))}
                     </div>
 
-                    {orderType === 'dine_in' && (
-                      <div className="mt-3 pt-2.5 border-t border-slate-200 flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
-                          <span>🪑 Table Number:</span>
+                    {isDineInAllowed && orderType === 'dine_in' && (
+                      <div className="mt-3 pt-2.5 border-t border-slate-200">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+                            <span>🪑 Table Number:</span>
+                          </div>
+                          <input
+                            ref={tableNumberInputRef}
+                            type="text"
+                            value={tableNumber || 'Table 1'}
+                            onChange={(e) => {
+                              setTableNumber(e.target.value);
+                              if (fieldErrors.table) setFieldErrors((prev) => ({ ...prev, table: '' }));
+                              if (validationError) setValidationError('');
+                            }}
+                            placeholder="e.g. Table 4"
+                            className={`w-28 py-1 px-2.5 text-xs font-black text-rose-700 bg-white border rounded-lg text-right focus:border-rose-500 outline-hidden ${
+                              fieldErrors.table ? 'border-rose-500 ring-2 ring-rose-500/20' : 'border-slate-300'
+                            }`}
+                          />
                         </div>
-                        <input
-                          type="text"
-                          value={tableNumber || 'Table 1'}
-                          onChange={(e) => setTableNumber(e.target.value)}
-                          placeholder="e.g. Table 4"
-                          className="w-28 py-1 px-2.5 text-xs font-black text-rose-700 bg-white border border-slate-300 rounded-lg text-right focus:border-rose-500 outline-hidden"
-                        />
+                        {fieldErrors.table && (
+                          <p className="text-[11px] text-rose-600 font-semibold mt-1 flex items-center gap-1">
+                            <AlertCircle className="w-3 h-3 shrink-0" />
+                            <span>{fieldErrors.table}</span>
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>
@@ -534,12 +629,27 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-700 mb-1">Your Full Name *</label>
                       <input
+                        ref={nameInputRef}
                         type="text"
                         value={customerDetails.name}
-                        onChange={(e) => setCustomerDetails({ name: e.target.value })}
+                        onChange={(e) => {
+                          setCustomerDetails({ name: e.target.value });
+                          if (fieldErrors.name) setFieldErrors((prev) => ({ ...prev, name: '' }));
+                          if (validationError) setValidationError('');
+                        }}
                         placeholder="e.g. Rahul Sharma"
-                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-rose-500 transition"
+                        className={`w-full bg-white border rounded-xl px-3 py-2 text-slate-900 placeholder-slate-400 focus:outline-none transition ${
+                          fieldErrors.name
+                            ? 'border-rose-500 ring-2 ring-rose-500/20'
+                            : 'border-slate-200 focus:border-rose-500'
+                        }`}
                       />
+                      {fieldErrors.name && (
+                        <p className="text-[11px] text-rose-600 font-semibold mt-1 flex items-center gap-1">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{fieldErrors.name}</span>
+                        </p>
+                      )}
                     </div>
 
                     <div>
@@ -552,17 +662,30 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
                           +91
                         </span>
                         <input
+                          ref={mobileInputRef}
                           type="tel"
                           value={customerDetails.phone}
                           onChange={(e) => {
                             const val = e.target.value.replace(/\D/g, '');
                             if (val.length <= 10) setCustomerDetails({ phone: val });
+                            if (fieldErrors.phone) setFieldErrors((prev) => ({ ...prev, phone: '' }));
+                            if (validationError) setValidationError('');
                           }}
                           placeholder="9876543210"
                           maxLength={10}
-                          className="w-full bg-white border border-slate-200 rounded-xl pl-11 pr-3 py-2 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-rose-500 transition"
+                          className={`w-full bg-white border rounded-xl pl-11 pr-3 py-2 text-slate-900 placeholder-slate-400 focus:outline-none transition ${
+                            fieldErrors.phone
+                              ? 'border-rose-500 ring-2 ring-rose-500/20'
+                              : 'border-slate-200 focus:border-rose-500'
+                          }`}
                         />
                       </div>
+                      {fieldErrors.phone && (
+                        <p className="text-[11px] text-rose-600 font-semibold mt-1 flex items-center gap-1">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{fieldErrors.phone}</span>
+                        </p>
+                      )}
                     </div>
 
                     {orderType === 'delivery' && (
@@ -572,12 +695,27 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
                             Delivery Address (Flat / House / Street) *
                           </label>
                           <textarea
+                            ref={addressInputRef}
                             value={customerDetails.address || ''}
-                            onChange={(e) => setCustomerDetails({ address: e.target.value })}
+                            onChange={(e) => {
+                              setCustomerDetails({ address: e.target.value });
+                              if (fieldErrors.address) setFieldErrors((prev) => ({ ...prev, address: '' }));
+                              if (validationError) setValidationError('');
+                            }}
                             placeholder="Flat 204, Skylark Heights, 2nd Main Road..."
                             rows={2}
-                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-rose-500 resize-none transition"
+                            className={`w-full bg-white border rounded-xl px-3 py-2 text-slate-900 placeholder-slate-400 focus:outline-none resize-none transition ${
+                              fieldErrors.address
+                                ? 'border-rose-500 ring-2 ring-rose-500/20'
+                                : 'border-slate-200 focus:border-rose-500'
+                            }`}
                           />
+                          {fieldErrors.address && (
+                            <p className="text-[11px] text-rose-600 font-semibold mt-1 flex items-center gap-1">
+                              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                              <span>{fieldErrors.address}</span>
+                            </p>
+                          )}
                         </div>
 
                         <div>
@@ -594,7 +732,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
                         </div>
 
                         {/* Delivery GPS Location Capture Section */}
-                        <div className="space-y-2 pt-1">
+                        <div ref={locationSectionRef} className="space-y-2 pt-1">
                           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-700">
                             <span className="flex items-center gap-1">
                               <LocateFixed className="w-3.5 h-3.5 text-emerald-600" />
@@ -605,13 +743,23 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
                             </span>
                           </div>
 
+                          {fieldErrors.location && (
+                            <p className="text-[11px] text-rose-600 font-semibold mt-0.5 flex items-center gap-1">
+                              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                              <span>{fieldErrors.location}</span>
+                            </p>
+                          )}
+
                           {/* 1. Prominent "Use My Current Location" Button */}
                           <button
+                            ref={locationButtonRef}
                             type="button"
                             onClick={handleCaptureGpsLocation}
                             disabled={isLocating}
                             id="use-current-location-btn"
-                            className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs shadow-sm shadow-emerald-700/20 flex items-center justify-center gap-2 transition active:scale-[0.99] disabled:opacity-80 disabled:cursor-wait cursor-pointer"
+                            className={`w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs shadow-sm shadow-emerald-700/20 flex items-center justify-center gap-2 transition active:scale-[0.99] disabled:opacity-80 disabled:cursor-wait cursor-pointer ${
+                              fieldErrors.location ? 'ring-2 ring-rose-500/40' : ''
+                            }`}
                           >
                             {isLocating ? (
                               <>
@@ -791,6 +939,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
                                       setShowManualPin(false);
                                       setLocationError(null);
                                       setValidationError('');
+                                      setFieldErrors((prev) => ({ ...prev, location: '', address: '' }));
                                     }}
                                     className="p-2 text-left rounded-lg bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-300 text-[10px] font-medium text-slate-800 transition flex flex-col justify-between shadow-2xs active:scale-[0.98]"
                                   >

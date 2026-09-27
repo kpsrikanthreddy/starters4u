@@ -2206,7 +2206,7 @@ export function createApp(): express.Application {
       const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 20;
       const offset = req.query.offset ? parseInt(req.query.offset as string, 10) : undefined;
       const page = req.query.page ? parseInt(req.query.page as string, 10) : undefined;
-      const category = (req.query.category as string) || undefined;
+      const category = (req.query.category as string) || (req.query.cuisine as string) || undefined;
       const search = (req.query.search as string) || (req.query.q as string) || undefined;
       const lat = req.query.lat ? parseFloat(req.query.lat as string) : (req.query.latitude ? parseFloat(req.query.latitude as string) : undefined);
       const lng = req.query.lng ? parseFloat(req.query.lng as string) : (req.query.longitude ? parseFloat(req.query.longitude as string) : undefined);
@@ -2602,22 +2602,50 @@ export function createApp(): express.Application {
     }
   });
 
-  app.get('/api/qr/validate', (req, res) => {
+  app.get('/api/qr/validate', async (req, res) => {
     const token = req.query.token as string;
     const restaurantSlug = req.query.slug as string | undefined;
     const result = qrService.validateSignedToken(token, restaurantSlug);
     if (!result.valid) {
       return res.status(401).json(result);
     }
+    if (result.source === 'table_qr' || result.orderMode === 'dine_in') {
+      const tableCheck = await qrService.verifyActiveTable(result.restaurantId, result.tableId, result.tableNumber);
+      if (!tableCheck.valid) {
+        return res.status(401).json({
+          valid: false,
+          error: tableCheck.error || 'Dine-In table is invalid, inactive, or not found.',
+          source: 'online_web',
+          orderMode: 'delivery',
+          isModeLocked: false,
+        });
+      }
+      result.tableId = tableCheck.tableId;
+      result.tableNumber = tableCheck.tableNumber;
+    }
     res.json(result);
   });
 
-  app.post('/api/qr/validate', (req, res) => {
+  app.post('/api/qr/validate', async (req, res) => {
     const token = req.body?.token;
     const restaurantSlug = req.body?.slug || req.body?.restaurantSlug;
     const result = qrService.validateSignedToken(token, restaurantSlug);
     if (!result.valid) {
       return res.status(401).json(result);
+    }
+    if (result.source === 'table_qr' || result.orderMode === 'dine_in') {
+      const tableCheck = await qrService.verifyActiveTable(result.restaurantId, result.tableId, result.tableNumber);
+      if (!tableCheck.valid) {
+        return res.status(401).json({
+          valid: false,
+          error: tableCheck.error || 'Dine-In table is invalid, inactive, or not found.',
+          source: 'online_web',
+          orderMode: 'delivery',
+          isModeLocked: false,
+        });
+      }
+      result.tableId = tableCheck.tableId;
+      result.tableNumber = tableCheck.tableNumber;
     }
     res.json(result);
   });

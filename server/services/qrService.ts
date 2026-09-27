@@ -200,6 +200,58 @@ export function validateSignedToken(token?: string, expectedRestaurantSlug?: str
   }
 }
 
+export async function verifyActiveTable(
+  restaurantId: string,
+  tableId?: string,
+  tableNumber?: string
+): Promise<{ valid: boolean; tableId?: string; tableNumber?: string; error?: string }> {
+  const rawNum = tableNumber ? tableNumber.replace(/^Table\s*/i, '').trim() : undefined;
+  let resolved: any = null;
+
+  if (isPostgresRunning()) {
+    try {
+      if (tableId) {
+        const r = await query(
+          `SELECT id, table_number, table_name, branch_id, is_active FROM restaurant_tables WHERE id = $1 AND restaurant_id = $2 LIMIT 1`,
+          [tableId, restaurantId]
+        );
+        if (r.rows.length > 0) resolved = r.rows[0];
+      }
+      if (!resolved && rawNum) {
+        const r = await query(
+          `SELECT id, table_number, table_name, branch_id, is_active FROM restaurant_tables WHERE restaurant_id = $1 AND table_number = $2 LIMIT 1`,
+          [restaurantId, rawNum]
+        );
+        if (r.rows.length > 0) resolved = r.rows[0];
+      }
+    } catch (err: any) {
+      console.warn('[qrService] verifyActiveTable query error:', err.message);
+    }
+  }
+
+  if (!resolved) {
+    resolved = (inMemoryDb.restaurant_tables || []).find(
+      (t) =>
+        t.restaurant_id === restaurantId &&
+        (t.id === tableId || (rawNum && String(t.table_number) === rawNum))
+    );
+  }
+
+  if (!resolved) {
+    return { valid: false, error: 'Table does not belong to this restaurant or does not exist.' };
+  }
+
+  if (resolved.is_active === false) {
+    return { valid: false, error: `Table ${resolved.table_number} is currently inactive.` };
+  }
+
+  return {
+    valid: true,
+    tableId: resolved.id,
+    tableNumber: `Table ${resolved.table_number}`,
+  };
+}
+
 // Persist / Cache QR token in Database
 async function registerTokenInDatabase(data: {
   restaurantId: string;
