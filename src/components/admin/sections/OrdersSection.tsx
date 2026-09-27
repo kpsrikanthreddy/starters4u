@@ -33,6 +33,18 @@ export const OrdersSection: React.FC = () => {
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [printType, setPrintType] = useState<'kot' | 'bill'>('kot');
   const [restaurantProfile, setRestaurantProfile] = useState<any>(null);
+  const [orderToCancel, setOrderToCancel] = useState<any | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [orderToDelete, setOrderToDelete] = useState<any | null>(null);
+
+  const getItemName = (it: any): string => {
+    return it.menuItem?.name || it.name || it.itemName || 'Item';
+  };
+
+  const getItemUnitPrice = (it: any): number => {
+    const val = it.unitPrice ?? it.customerUnitPrice ?? it.price ?? it.menuItem?.price ?? 0;
+    return Number(val) || 0;
+  };
 
   useEffect(() => {
     adminFetch('/api/admin/settings')
@@ -97,7 +109,16 @@ export const OrdersSection: React.FC = () => {
   };
 
   const handleDeleteOrder = async (orderId: string) => {
-    if (!window.confirm('Are you sure you want to permanently delete this order?')) return;
+    const ord = orders.find((o) => o.id === orderId) || (selectedOrder?.id === orderId ? selectedOrder : null);
+    if (ord) {
+      setOrderToDelete(ord);
+    } else {
+      if (!window.confirm('Are you sure you want to permanently delete this order?')) return;
+      await executeDeleteOrder(orderId);
+    }
+  };
+
+  const executeDeleteOrder = async (orderId: string) => {
     try {
       const res = await adminFetch(`/api/admin/orders/${encodeURIComponent(orderId)}`, {
         method: 'DELETE',
@@ -108,6 +129,9 @@ export const OrdersSection: React.FC = () => {
           setSelectedOrder(null);
         }
         soundService.playChime('pop');
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Failed to delete order: ${err.error || 'Server error'}`);
       }
     } catch (err: any) {
       alert(`Failed to delete order: ${err.message}`);
@@ -310,22 +334,42 @@ export const OrdersSection: React.FC = () => {
                               {ord.status}
                             </span>
                           </td>
-                          <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center justify-end gap-1.5">
+                          <td className="py-3.5 px-3 text-right" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center justify-end gap-1.5 flex-wrap sm:flex-nowrap">
                               {['placed', 'pending', 'confirmed', 'accepted'].includes(ord.status) && (
                                 <button
                                   onClick={() => handleUpdateStatus(ord.id, 'preparing', 'Order accepted and sent to kitchen')}
                                   disabled={isUpdating}
-                                  className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-[10px] transition shadow-xs"
+                                  className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-[10px] transition shadow-xs whitespace-nowrap"
                                 >
                                   Accept
                                 </button>
                               )}
                               <button
                                 onClick={() => setSelectedOrder(ord)}
-                                className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] transition"
+                                className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] transition whitespace-nowrap"
                               >
                                 Details
+                              </button>
+                              {ord.status !== 'cancelled' && ord.status !== 'delivered' && (
+                                <button
+                                  onClick={() => {
+                                    setOrderToCancel(ord);
+                                    setCancelReason('');
+                                  }}
+                                  className="px-2 py-1 rounded-lg border border-rose-200 bg-rose-50/70 hover:bg-rose-100 text-rose-700 font-bold text-[10px] transition flex items-center gap-1 whitespace-nowrap"
+                                  title="Cancel Order"
+                                >
+                                  <Ban className="w-3 h-3 text-rose-600" />
+                                  <span>Cancel</span>
+                                </button>
+                              )}
+                              <button
+                                onClick={() => setOrderToDelete(ord)}
+                                className="p-1 rounded-lg border border-slate-200 bg-slate-50 hover:bg-rose-50 text-slate-400 hover:text-rose-600 hover:border-rose-200 transition"
+                                title="Delete order permanently"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
                           </td>
@@ -424,27 +468,78 @@ export const OrdersSection: React.FC = () => {
                 )}
               </div>
 
-              {/* Ordered Items List */}
+              {/* Ordered Items List - Full Item Details */}
               <div className="space-y-2">
                 <div className="text-[10px] uppercase font-bold text-slate-400">Order Items</div>
-                <div className="divide-y divide-slate-100 max-h-48 overflow-y-auto">
-                  {selectedOrder.items?.map((item: any, idx: number) => (
-                    <div key={idx} className="py-2 flex items-center justify-between text-xs">
-                      <div>
-                        <div className="font-bold text-slate-800">
-                          {item.quantity}x {item.name || item.itemName}
-                        </div>
-                        {item.specialInstructions && (
-                          <div className="text-[10px] text-amber-600 italic">
-                            Note: {item.specialInstructions}
+                <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto space-y-2">
+                  {selectedOrder.items?.map((item: any, idx: number) => {
+                    const itemName = getItemName(item);
+                    const unitPrice = getItemUnitPrice(item);
+                    const qty = Number(item.quantity) || 1;
+                    const lineTotal = unitPrice * qty;
+
+                    const shapeCode = item.selectedShape || item.shape;
+                    const shapeLabel =
+                      shapeCode === 'R'
+                        ? 'Rectangular'
+                        : shapeCode === 'C'
+                        ? 'Circular'
+                        : shapeCode === 'S'
+                        ? 'Square'
+                        : shapeCode;
+
+                    const sizeLabel = item.selectedSize || item.size;
+                    const crustLabel = item.selectedCrust || item.crust;
+                    const spiceLabel = item.spiceLevel || item.spice;
+
+                    const rawAddons = item.addons || item.addOns || item.customizations || [];
+                    const addonNames = Array.isArray(rawAddons)
+                      ? rawAddons
+                          .map((a: any) => {
+                            if (typeof a === 'string') return a;
+                            const price = Number(a.price) ? ` (+₹${Number(a.price).toFixed(2)})` : '';
+                            return `${a.name || a.title || a.addonName || 'Add-on'}${price}`;
+                          })
+                          .filter(Boolean)
+                      : [];
+
+                    const note = item.specialInstructions || item.notes || item.instructions;
+
+                    return (
+                      <div key={idx} className="pt-2 first:pt-0 flex items-start justify-between text-xs">
+                        <div className="flex-1 pr-3">
+                          <div className="font-bold text-slate-800 leading-snug">
+                            <span className="text-slate-950 font-black mr-1">{qty}x</span>
+                            <span>{itemName}</span>
                           </div>
-                        )}
+
+                          {/* Customizations Display */}
+                          <div className="space-y-0.5 mt-0.5 text-[11px] text-slate-500">
+                            {sizeLabel && <div>Size: {sizeLabel}</div>}
+                            {shapeLabel && <div>Shape: {shapeLabel}</div>}
+                            {crustLabel && <div>Crust: {crustLabel}</div>}
+                            {spiceLabel && (
+                              <div className="text-rose-600 font-medium">Spice: {spiceLabel}</div>
+                            )}
+                            {addonNames.length > 0 && <div>Add-ons: {addonNames.join(', ')}</div>}
+                            {note && (
+                              <div className="text-amber-800 bg-amber-50 p-1 rounded font-medium text-[10px] mt-0.5">
+                                Note: {note}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="text-[10px] text-slate-400 mt-1">
+                            ₹{unitPrice.toFixed(2)} each
+                          </div>
+                        </div>
+
+                        <div className="font-black text-slate-900 text-xs shrink-0 text-right pt-0.5">
+                          ₹{lineTotal.toFixed(2)}
+                        </div>
                       </div>
-                      <div className="font-black text-slate-900">
-                        ₹{Number(item.price || item.unitPrice || 0) * Number(item.quantity || 1)}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -458,7 +553,12 @@ export const OrdersSection: React.FC = () => {
                 </div>
                 <div className="flex justify-between text-slate-900 font-black text-sm pt-1 border-t border-slate-200">
                   <span>Grand Total</span>
-                  <span>₹{Number(selectedOrder.grandTotal || selectedOrder.total || 0).toLocaleString('en-IN')}</span>
+                  <span>
+                    ₹{Number(selectedOrder.grandTotal || selectedOrder.total || 0).toLocaleString('en-IN', {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </span>
                 </div>
               </div>
 
@@ -535,7 +635,10 @@ export const OrdersSection: React.FC = () => {
 
                   {selectedOrder.status !== 'cancelled' && selectedOrder.status !== 'delivered' && (
                     <button
-                      onClick={() => handleCancelOrder(selectedOrder.id)}
+                      onClick={() => {
+                        setOrderToCancel(selectedOrder);
+                        setCancelReason('');
+                      }}
                       className="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs transition flex items-center gap-1"
                     >
                       <Ban className="w-3.5 h-3.5" />
@@ -544,7 +647,7 @@ export const OrdersSection: React.FC = () => {
                   )}
 
                   <button
-                    onClick={() => handleDeleteOrder(selectedOrder.id)}
+                    onClick={() => setOrderToDelete(selectedOrder)}
                     className="p-2 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition"
                     title="Delete order permanently"
                   >
@@ -556,6 +659,114 @@ export const OrdersSection: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Cancel Order Confirmation Modal */}
+      {orderToCancel && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <Ban className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-slate-900 text-sm">
+                  Cancel order {orderToCancel.orderNumber || orderToCancel.id.slice(0, 8)}?
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Are you sure you want to cancel this order?
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                Reason for Cancellation (optional):
+              </label>
+              <input
+                type="text"
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                placeholder="e.g. Out of stock, Customer request"
+                className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500"
+              />
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setOrderToCancel(null);
+                  setCancelReason('');
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition"
+              >
+                Keep Order
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const id = orderToCancel.id;
+                  const reason = cancelReason || 'Cancelled by Admin';
+                  setOrderToCancel(null);
+                  setCancelReason('');
+                  await handleUpdateStatus(id, 'cancelled', reason);
+                }}
+                disabled={isUpdating}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs transition shadow-xs"
+              >
+                Cancel Order
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Order Destructive Confirmation Modal */}
+      {orderToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-slate-900 text-sm">
+                  Delete order {orderToDelete.orderNumber || orderToDelete.id.slice(0, 8)} permanently?
+                </h3>
+                <p className="text-[11px] text-rose-600 font-bold mt-0.5">
+                  This action cannot be undone.
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-100 leading-relaxed">
+              Permanently deleting this order will remove it from the active orders queue. Historical settlement logs and audit records remain preserved.
+            </p>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setOrderToDelete(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition"
+              >
+                Keep Order
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const id = orderToDelete.id;
+                  setOrderToDelete(null);
+                  await executeDeleteOrder(id);
+                }}
+                disabled={isUpdating}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs transition shadow-xs"
+              >
+                Delete Permanently
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Detailed Itemized Tax Invoice & KOT Modal */}
       {showPrintModal && selectedOrder && (
