@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAdminAuth } from '../../context/AdminAuthContext';
+import { clearChunkReloadFlag } from '../../utils/chunkReloadRecovery';
 import { AdminLogin } from './AdminLogin';
 import { AdminNavbar } from './AdminNavbar';
 import { PrintDevicesSection } from './PrintDevicesSection';
@@ -85,6 +86,11 @@ export const AdminApp: React.FC = () => {
       window.history.replaceState({}, '', url.toString());
     }
   };
+
+  // Reset chunk reload session guard once AdminApp is mounted successfully
+  useEffect(() => {
+    clearChunkReloadFlag();
+  }, []);
 
   if (isLoading) {
     return (

@@ -33,18 +33,20 @@ import { updateDocumentMetadata } from './utils/updateDocumentMetadata';
 import { CANONICAL_DOMAIN } from './config/businessInfo';
 import { FoodCategory, Order } from './types';
 import { ShoppingBag, ArrowRight, Loader2 } from 'lucide-react';
+import { GlobalErrorBoundary } from './components/GlobalErrorBoundary';
+import { lazyWithRetry, clearChunkReloadFlag } from './utils/chunkReloadRecovery';
 
-// Code-split heavy interactive and admin components (Item 12)
-const AdminApp = React.lazy(() =>
+// Code-split heavy interactive and admin components with automatic deployment chunk-reload recovery
+const AdminApp = lazyWithRetry(() =>
   import('./components/admin/AdminApp').then((m) => ({ default: m.AdminApp }))
 );
-const PlatformAdminApp = React.lazy(() =>
+const PlatformAdminApp = lazyWithRetry(() =>
   import('./components/admin/PlatformAdminApp').then((m) => ({ default: m.PlatformAdminApp }))
 );
-const RazorpayCheckoutModal = React.lazy(() =>
+const RazorpayCheckoutModal = lazyWithRetry(() =>
   import('./components/RazorpayCheckoutModal').then((m) => ({ default: m.RazorpayCheckoutModal }))
 );
-const ShapeGuideModal = React.lazy(() =>
+const ShapeGuideModal = lazyWithRetry(() =>
   import('./components/ShapeGuideModal').then((m) => ({ default: m.ShapeGuideModal }))
 );
 
@@ -510,6 +512,11 @@ export default function App({ initialPath }: { initialPath?: string }) {
     currentHost.startsWith('admin.') ||
     currentPath.startsWith('/restaurant-admin');
 
+  // Clear any dynamic chunk reload guard after successful application mount
+  useEffect(() => {
+    clearChunkReloadFlag();
+  }, []);
+
   // Ensure administrative and platform admin portals immediately set private noindex directives
   useEffect(() => {
     if (isPlatformAdmin || isAdminPortal) {
@@ -522,25 +529,35 @@ export default function App({ initialPath }: { initialPath?: string }) {
       <StoreProvider>
         <AdminAuthProvider>
           {isPlatformAdmin ? (
-            <Suspense
-              fallback={
-                <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
-                  <Loader2 className="w-8 h-8 animate-spin text-rose-500" />
-                </div>
-              }
+            <GlobalErrorBoundary
+              fallbackTitle="Starters4U Platform Admin could not load."
+              fallbackMessage="An unexpected error occurred while loading the Platform Admin console. Reloading will fetch the latest version."
             >
-              <PlatformAdminApp />
-            </Suspense>
+              <Suspense
+                fallback={
+                  <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
+                    <Loader2 className="w-8 h-8 animate-spin text-rose-500" />
+                  </div>
+                }
+              >
+                <PlatformAdminApp />
+              </Suspense>
+            </GlobalErrorBoundary>
           ) : isAdminPortal ? (
-            <Suspense
-              fallback={
-                <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
-                  <Loader2 className="w-8 h-8 animate-spin text-rose-500" />
-                </div>
-              }
+            <GlobalErrorBoundary
+              fallbackTitle="Starters4U Admin could not load."
+              fallbackMessage="A network issue or recent system deployment prevented the admin console from loading. Please reload the portal."
             >
-              <AdminApp />
-            </Suspense>
+              <Suspense
+                fallback={
+                  <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
+                    <Loader2 className="w-8 h-8 animate-spin text-rose-500" />
+                  </div>
+                }
+              >
+                <AdminApp />
+              </Suspense>
+            </GlobalErrorBoundary>
           ) : (
             <CustomerApp currentPath={currentPath} onNavigatePath={navigateTo} />
           )}
