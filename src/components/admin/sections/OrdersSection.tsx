@@ -421,8 +421,8 @@ export const OrdersSection: React.FC = () => {
                     <div key={idx} className="py-2 flex items-center justify-between text-xs">
                       <div>
                         <div className="font-bold text-slate-800">
-                          {item.quantity}x {item.name || item.itemName}
-                        </div>
+							{item.quantity}x {item.menuItem?.name || item.name || item.itemName || 'Item'}
+						</div>			
                         {item.specialInstructions && (
                           <div className="text-[10px] text-amber-600 italic">
                             Note: {item.specialInstructions}
@@ -430,7 +430,10 @@ export const OrdersSection: React.FC = () => {
                         )}
                       </div>
                       <div className="font-black text-slate-900">
-                        ₹{Number(item.price || item.unitPrice || 0) * Number(item.quantity || 1)}
+                        ₹{(
+							Number(item.unitPrice ?? item.customerUnitPrice ?? item.menuItem?.price ?? item.price ?? 0) *
+							Number(item.quantity || 1)
+							).toLocaleString('en-IN')}
                       </div>
                     </div>
                   ))}
