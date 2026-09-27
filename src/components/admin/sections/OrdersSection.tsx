@@ -586,16 +586,28 @@ export const OrdersSection: React.FC = () => {
                 </div>
               )}
               <div className="border-t border-dashed border-slate-300 pt-1 space-y-1">
-                {selectedOrder.items?.map((item: any, i: number) => (
-                  <div key={i} className="flex justify-between">
-                    <span>
-                      {item.quantity}x {item.name || item.itemName}
-                    </span>
-                    {printType === 'bill' && (
-                      <span>₹{Number(item.price || item.unitPrice || 0) * Number(item.quantity || 1)}</span>
-                    )}
-                  </div>
-                ))}
+			{selectedOrder.items?.map((item: any, i: number) => (
+  <div key={i} className="flex justify-between">
+    <span>
+      {item.quantity}x{' '}
+      {item.menuItem?.name || item.name || item.itemName || 'Item'}
+    </span>
+
+    {printType === 'bill' && (
+      <span>
+        ₹{(
+          Number(
+            item.unitPrice ??
+            item.customerUnitPrice ??
+            item.menuItem?.price ??
+            item.price ??
+            0
+          ) * Number(item.quantity || 1)
+        ).toFixed(2)}
+      </span>
+    )}
+  </div>
+))}
               </div>
               {printType === 'bill' && (
                 <div className="border-t border-dashed border-slate-300 pt-1 flex justify-between font-bold text-slate-900">
