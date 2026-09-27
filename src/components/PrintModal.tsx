@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Order } from '../types';
-import { Printer, ChefHat, X } from 'lucide-react';
+import { Printer, ChefHat, X, Loader2 } from 'lucide-react';
 
 export interface RestaurantTenantInfo {
   name?: string;
@@ -185,7 +186,12 @@ export const PrintModal: React.FC<PrintModalProps> = ({
     });
   }
 
+  const [isPrinting, setIsPrinting] = useState(false);
+
   const handleSendToThermalPrinter = async () => {
+    if (isPrinting) return;
+    setIsPrinting(true);
+
     // 1. Dispatch reprint job to background thermal print agent if available
     try {
       const token = typeof window !== 'undefined' ? localStorage.getItem('starters4u_admin_jwt_token') : null;
@@ -204,13 +210,106 @@ export const PrintModal: React.FC<PrintModalProps> = ({
       }
     } catch {}
 
-    // 2. Trigger browser thermal printer output
+    // 2. Trigger browser thermal printer output cleanly via isolated iframe or direct window print
+    const slipEl = document.getElementById('printable-slip');
+    if (slipEl) {
+      try {
+        const existingFrame = document.getElementById('receipt-print-frame');
+        if (existingFrame) existingFrame.remove();
+
+        const iframe = document.createElement('iframe');
+        iframe.id = 'receipt-print-frame';
+        iframe.style.position = 'fixed';
+        iframe.style.right = '0';
+        iframe.style.bottom = '0';
+        iframe.style.width = '0';
+        iframe.style.height = '0';
+        iframe.style.border = 'none';
+        iframe.style.visibility = 'hidden';
+        document.body.appendChild(iframe);
+
+        const frameDoc = iframe.contentWindow?.document;
+        if (frameDoc) {
+          const styleNodes = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+            .map((node) => node.outerHTML)
+            .join('\n');
+
+          frameDoc.open();
+          frameDoc.write(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${isKOT ? 'Kitchen Order Ticket' : 'Tax Invoice'} - ${orderNumber}</title>
+  ${styleNodes}
+  <style>
+    @page {
+      size: 80mm auto;
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      width: 80mm !important;
+      max-width: 80mm !important;
+      margin: 0 auto !important;
+      padding: 0 !important;
+      background: #fff !important;
+      color: #000 !important;
+      font-family: 'Courier New', Courier, monospace !important;
+      font-size: 11px !important;
+      line-height: 1.3 !important;
+    }
+    .print-frame-slip {
+      width: 80mm !important;
+      max-width: 80mm !important;
+      padding: 3mm 4mm !important;
+      margin: 0 auto !important;
+      box-shadow: none !important;
+      border: none !important;
+      background: #fff !important;
+      color: #000 !important;
+      page-break-after: avoid !important;
+      break-after: avoid !important;
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="print-frame-slip">
+    ${slipEl.innerHTML}
+  </div>
+</body>
+</html>`);
+          frameDoc.close();
+
+          setTimeout(() => {
+            iframe.contentWindow?.focus();
+            iframe.contentWindow?.print();
+            setIsPrinting(false);
+            if (onPrinted) onPrinted();
+            setTimeout(() => {
+              iframe.remove();
+            }, 2500);
+          }, 300);
+          return;
+        }
+      } catch (err) {
+        console.warn('[PrintModal] Iframe print fallback:', err);
+      }
+    }
+
+    // Direct fallback
     window.print();
+    setIsPrinting(false);
     if (onPrinted) onPrinted();
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+  const modalContent = (
+    <div className="print-modal-backdrop fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
       {/* Thermal Print Page Media Styles */}
       <style>{`
         @media print {
@@ -218,41 +317,69 @@ export const PrintModal: React.FC<PrintModalProps> = ({
             size: 80mm auto;
             margin: 0;
           }
-          body {
+          html, body {
             background: #fff !important;
             color: #000 !important;
             margin: 0 !important;
             padding: 0 !important;
+            height: auto !important;
+            min-height: 0 !important;
           }
-          body * {
-            visibility: hidden;
+          #root {
+            display: none !important;
           }
-          #printable-slip, #printable-slip * {
-            visibility: visible;
+          .no-print {
+            display: none !important;
+          }
+          .print-modal-backdrop {
+            position: static !important;
+            background: transparent !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            display: block !important;
+          }
+          .print-modal-card {
+            border: none !important;
+            box-shadow: none !important;
+            border-radius: 0 !important;
+            max-width: 80mm !important;
+            width: 80mm !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            max-height: none !important;
+            overflow: visible !important;
+            background: #fff !important;
+          }
+          .print-modal-preview-wrapper {
+            background: #fff !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            overflow: visible !important;
+            display: block !important;
           }
           #printable-slip {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100% !important;
+            position: static !important;
+            width: 80mm !important;
             max-width: 80mm !important;
             margin: 0 auto !important;
             padding: 3mm 4mm !important;
             box-shadow: none !important;
             border: none !important;
+            border-radius: 0 !important;
             background: #fff !important;
             color: #000 !important;
             font-family: 'Courier New', Courier, monospace !important;
             font-size: 11px !important;
             line-height: 1.3 !important;
-          }
-          .no-print {
-            display: none !important;
+            page-break-after: avoid !important;
+            break-after: avoid !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
           }
         }
       `}</style>
 
-      <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden max-h-[92vh] flex flex-col">
+      <div className="print-modal-card bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden max-h-[92vh] flex flex-col">
         {/* Modal Top Bar */}
         <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50 no-print">
           <div className="flex items-center gap-2">
@@ -273,6 +400,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="p-1.5 rounded-full hover:bg-slate-200 text-slate-500 transition"
           >
@@ -281,7 +409,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
         </div>
 
         {/* Printable Preview Area */}
-        <div className="p-4 overflow-y-auto flex-1 bg-slate-100 flex justify-center">
+        <div className="print-modal-preview-wrapper p-4 overflow-y-auto flex-1 bg-slate-100 flex justify-center">
           {/* Thermal Slip Simulation (80mm / 58mm POS standard) */}
           <div
             ref={printAreaRef}
@@ -511,22 +639,30 @@ export const PrintModal: React.FC<PrintModalProps> = ({
         {/* Footer Actions */}
         <div className="p-4 border-t border-slate-100 bg-white flex gap-3 no-print">
           <button
+            type="button"
             onClick={onClose}
             className="flex-1 py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition"
           >
             Close
           </button>
           <button
+            type="button"
             onClick={handleSendToThermalPrinter}
+            disabled={isPrinting}
             className={`flex-1 py-2.5 px-4 rounded-xl text-white font-extrabold text-xs transition flex items-center justify-center gap-1.5 shadow-xs ${
-              isKOT ? 'bg-amber-600 hover:bg-amber-700' : 'bg-rose-600 hover:bg-rose-700'
-            }`}
+              isPrinting ? 'opacity-70 cursor-wait' : ''
+            } ${isKOT ? 'bg-amber-600 hover:bg-amber-700' : 'bg-rose-600 hover:bg-rose-700'}`}
           >
-            <Printer className="w-4 h-4" />
-            <span>Send to Thermal Printer</span>
+            {isPrinting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+            <span>{isPrinting ? 'Preparing Slip...' : 'Send to Thermal Printer'}</span>
           </button>
         </div>
       </div>
     </div>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(modalContent, document.body);
+  }
+  return modalContent;
 };
