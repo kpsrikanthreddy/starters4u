@@ -329,6 +329,38 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
     }
   };
 
+  const ON_PREMISE_STAGES = [
+    STAGES[0],
+    STAGES[1],
+    STAGES[2],
+    {
+      status: 'packing' as OrderStatus,
+      title: order.orderType === 'dine_in' ? 'Final Preparation' : 'Packing & Quality Check',
+      subtitle: order.orderType === 'dine_in'
+        ? 'Final kitchen checks before serving at your table'
+        : 'Final quality check and packing for counter pickup',
+      icon: '📦',
+    },
+    {
+      status: 'ready' as OrderStatus,
+      title: order.orderType === 'dine_in' ? 'Ready to Serve' : 'Ready for Pickup',
+      subtitle: order.orderType === 'dine_in'
+        ? 'Your order is ready to be served at your table'
+        : 'Your takeaway order is ready at the counter',
+      icon: '✅',
+    },
+    {
+      status: 'completed' as OrderStatus,
+      title: 'Order Completed',
+      subtitle: order.orderType === 'dine_in'
+        ? 'Your dine-in order has been completed'
+        : 'Your counter takeaway order has been completed',
+      icon: '🎉',
+    },
+  ];
+
+  const timelineStages = isOnPremiseOrder ? ON_PREMISE_STAGES : STAGES;
+
   const currentStageIndex = getStageIndex(order.status);
   const isDelivered = order.status === 'delivered' || (order.status as string) === 'completed';
   const isCancelled = order.status === 'cancelled' || (order.status as string) === 'rejected';
@@ -356,7 +388,7 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
         return 'Order Ready for Pickup';
       case 'delivered':
       case 'completed':
-        return 'Order Delivered to Doorstep!';
+        return isOnPremiseOrder ? 'Order Completed!' : 'Order Delivered to Doorstep!';
       case 'cancelled':
       case 'rejected':
         return 'Order Cancelled';
@@ -441,8 +473,9 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
       ) : (
         /* Main Tracking Grid */
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Delivery-only tracking/map. Dine-in and Counter QR orders do not need location tracking. */}
-          {!isOnPremiseOrder && <div className="lg:col-span-7 space-y-6">
+          {/* Kitchen/order status and progress timeline are shown for every order type.
+              Only delivery-specific rider/map/location content is hidden for Table QR and Counter QR. */}
+          <div className="lg:col-span-7 space-y-6">
             {/* Google Maps Order Tracking Card */}
             <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm relative overflow-hidden">
               {/* Header with Genuine Kitchen Status */}
@@ -468,38 +501,41 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                 </div>
               </div>
 
-              {/* Required Telemetry Disclaimer Notice */}
-              <div className="mb-4 p-3 bg-amber-50/90 border border-amber-200 rounded-2xl flex items-start gap-2.5 text-xs text-amber-900">
-                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div className="leading-relaxed font-medium">
-                  Live rider location is not currently available. Order progress below reflects updates from the restaurant.
-                </div>
-              </div>
+              {/* Delivery-only telemetry and map. Hidden for Table QR and Counter QR orders. */}
+              {!isOnPremiseOrder && (
+                <>
+                  <div className="mb-4 p-3 bg-amber-50/90 border border-amber-200 rounded-2xl flex items-start gap-2.5 text-xs text-amber-900">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="leading-relaxed font-medium">
+                      Live rider location is not currently available. Order progress below reflects updates from the restaurant.
+                    </div>
+                  </div>
 
-              {/* Google Maps Map displaying Restaurant location & Confirmed delivery location */}
-              <div className="mb-4">
-                <TrackingMapErrorBoundary
-                  restaurantLocation={{
-                    name: restaurantName || 'MOZZ Pizzateria',
-                    lat: MOZZ_RESTAURANT_LOCATION.lat,
-                    lng: MOZZ_RESTAURANT_LOCATION.lng,
-                  }}
-                  customerLocation={
-                    order.customer?.latitude && order.customer?.longitude
-                      ? {
-                          lat: Number(order.customer.latitude),
-                          lng: Number(order.customer.longitude),
-                          address: detectedAddress || order.customer?.address,
-                        }
-                      : null
-                  }
-                >
-                  <GoogleMapsLiveTracker
-                    order={order}
-                    onAddressDetected={(address) => setDetectedAddress(address)}
-                  />
-                </TrackingMapErrorBoundary>
-              </div>
+                  <div className="mb-4">
+                    <TrackingMapErrorBoundary
+                      restaurantLocation={{
+                        name: restaurantName || 'MOZZ Pizzateria',
+                        lat: MOZZ_RESTAURANT_LOCATION.lat,
+                        lng: MOZZ_RESTAURANT_LOCATION.lng,
+                      }}
+                      customerLocation={
+                        order.customer?.latitude && order.customer?.longitude
+                          ? {
+                              lat: Number(order.customer.latitude),
+                              lng: Number(order.customer.longitude),
+                              address: detectedAddress || order.customer?.address,
+                            }
+                          : null
+                      }
+                    >
+                      <GoogleMapsLiveTracker
+                        order={order}
+                        onAddressDetected={(address) => setDetectedAddress(address)}
+                      />
+                    </TrackingMapErrorBoundary>
+                  </div>
+                </>
+              )}
 
               {/* Status Sync Footer */}
               <div className="mt-4 pt-3 border-t border-slate-200 flex items-center justify-between">
@@ -532,10 +568,10 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                   ✓
                 </div>
                 <h3 className="text-base sm:text-lg font-bold text-emerald-900">
-                  Order delivered successfully. Thank you for ordering from MOZZ!
+                  {isOnPremiseOrder ? 'Order completed successfully. Thank you for ordering from MOZZ!' : 'Order delivered successfully. Thank you for ordering from MOZZ!'}
                 </h3>
                 <p className="text-xs text-emerald-700 font-medium">
-                  Your food was delivered fresh & hot. We hope you enjoyed your meal!
+                  {isOnPremiseOrder ? 'Your restaurant order is complete. We hope you enjoyed your meal!' : 'Your food was delivered fresh & hot. We hope you enjoyed your meal!'}
                 </p>
               </div>
             )}
@@ -568,14 +604,14 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                 </div>
 
                 <div className="space-y-4">
-                  {STAGES.map((stage, idx) => {
+                  {timelineStages.map((stage, idx) => {
                     const isPassed = idx <= currentStageIndex;
                     const isCurrent = idx === currentStageIndex;
 
                     return (
                       <div key={stage.status} className="flex items-start gap-4 relative">
                         {/* Connecting line */}
-                        {idx < STAGES.length - 1 && (
+                        {idx < timelineStages.length - 1 && (
                           <div
                             className={`absolute left-4 top-8 bottom-0 w-0.5 -ml-px transition-colors ${
                               idx < currentStageIndex ? 'bg-rose-500' : 'bg-slate-200'
@@ -620,10 +656,10 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                 </div>
               </div>
             )}
-          </div>}
+          </div>
 
-          {/* Order Summary Receipt & Details. Full width for Table/Counter orders. */}
-          <div className={`${isOnPremiseOrder ? 'lg:col-span-12' : 'lg:col-span-5'} space-y-6`}>
+          {/* Order Summary Receipt & Details */}
+          <div className="lg:col-span-5 space-y-6">
             {/* Order Details Receipt Card */}
             <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-5">
               <div className="flex items-center justify-between pb-4 border-b border-slate-200">
