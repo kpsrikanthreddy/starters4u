@@ -92,21 +92,6 @@ export const AdminApp: React.FC = () => {
     clearChunkReloadFlag();
   }, []);
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-3 border-rose-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-xs text-slate-400">Verifying Restaurant Admin Session...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!isAuthenticated) {
-    return <AdminLogin />;
-  }
-
   const userRole = user?.role || 'RESTAURANT_OWNER';
 
   const navItems = React.useMemo(() => {
@@ -135,6 +120,22 @@ export const AdminApp: React.FC = () => {
       setActiveSection(navItems[0].id);
     }
   }, [navItems, activeSection]);
+
+  // Keep all hooks above conditional returns so React executes hooks in a stable order.
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-3 border-rose-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs text-slate-400">Verifying Restaurant Admin Session...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <AdminLogin />;
+  }
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col text-slate-900">
