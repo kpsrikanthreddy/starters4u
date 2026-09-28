@@ -151,6 +151,17 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
 
   const order = sessionOrder || activeOrder || (activeOrderId ? orders.find((o) => o.id === activeOrderId) : null);
 
+  // Table QR (dine-in) and Counter QR (takeaway) orders happen at the restaurant.
+  // Delivery maps, rider navigation and delivery tracking are therefore irrelevant.
+  const isOnPremiseOrder = Boolean(
+    order && (
+      order.entrySource === 'table_qr' ||
+      order.entrySource === 'counter_qr' ||
+      order.orderType === 'dine_in' ||
+      order.orderType === 'takeaway'
+    )
+  );
+
   // Synchronize URL with active order for seamless bookmarking/refreshing
   useEffect(() => {
     if (order?.id && typeof window !== 'undefined') {
@@ -430,8 +441,8 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
       ) : (
         /* Main Tracking Grid */
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left 7 Cols: Interactive Map & Genuine Timeline */}
-          <div className="lg:col-span-7 space-y-6">
+          {/* Delivery-only tracking/map. Dine-in and Counter QR orders do not need location tracking. */}
+          {!isOnPremiseOrder && <div className="lg:col-span-7 space-y-6">
             {/* Google Maps Order Tracking Card */}
             <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm relative overflow-hidden">
               {/* Header with Genuine Kitchen Status */}
@@ -609,10 +620,10 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                 </div>
               </div>
             )}
-          </div>
+          </div>}
 
-          {/* Right 5 Cols: Order Summary Receipt & Details */}
-          <div className="lg:col-span-5 space-y-6">
+          {/* Order Summary Receipt & Details. Full width for Table/Counter orders. */}
+          <div className={`${isOnPremiseOrder ? 'lg:col-span-12' : 'lg:col-span-5'} space-y-6`}>
             {/* Order Details Receipt Card */}
             <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-5">
               <div className="flex items-center justify-between pb-4 border-b border-slate-200">
@@ -635,22 +646,28 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                 </div>
               </div>
 
-              {/* Customer Details: Confirmed delivery location */}
+              {/* Customer / fulfilment details */}
               <div className="text-xs space-y-1.5 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-slate-700">Confirmed delivery location:</span>
-                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
-                    <MapPin className="w-3 h-3 text-emerald-600" />
-                    Confirmed location
+                  <span className="font-bold text-slate-700">
+                    {isOnPremiseOrder ? (order.entrySource === 'table_qr' || order.orderType === 'dine_in' ? 'Dine-in order:' : 'Counter takeaway order:') : 'Confirmed delivery location:'}
                   </span>
+                  {!isOnPremiseOrder && (
+                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
+                      <MapPin className="w-3 h-3 text-emerald-600" />
+                      Confirmed location
+                    </span>
+                  )}
                 </div>
                 <div className="text-slate-900 font-semibold">
                   {order.customer?.name || 'Valued Customer'} {order.customer?.phone ? `(${order.customer.phone})` : ''}
                 </div>
-                <div className="text-slate-600 text-[11px] leading-relaxed">
-                  {detectedAddress || order.customer?.address || 'Delivery Address'}
-                </div>
-                {order.customer?.latitude && order.customer?.longitude && (
+                {!isOnPremiseOrder && (
+                  <div className="text-slate-600 text-[11px] leading-relaxed">
+                    {detectedAddress || order.customer?.address || 'Delivery Address'}
+                  </div>
+                )}
+                {!isOnPremiseOrder && order.customer?.latitude && order.customer?.longitude && (
                   <div className="text-[10px] font-mono text-emerald-600">
                     GPS Coordinates: {Number(order.customer.latitude).toFixed(6)}, {Number(order.customer.longitude).toFixed(6)}
                   </div>
