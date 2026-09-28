@@ -2593,9 +2593,15 @@ export function createApp(): express.Application {
     }
   });
 
-  app.get('/api/qr/catalog', async (_req, res) => {
+  app.get('/api/qr/catalog', async (req, res) => {
     try {
-      const catalog = await qrService.getTableCatalog();
+      // Generate QR tokens on the server with QR_SIGNING_SECRET.
+      // Tenant details are supplied by RestaurantContext so Counter QR and Table QR
+      // are signed for the same restaurant/branch that is currently being managed.
+      const restaurantId = (req.query.restaurantId as string | undefined) || undefined;
+      const branchId = (req.query.branchId as string | undefined) || undefined;
+      const restaurantSlug = (req.query.slug as string | undefined) || undefined;
+      const catalog = await qrService.getTableCatalog(restaurantId, branchId, restaurantSlug);
       res.json(catalog);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to fetch QR catalog', details: err.message });
