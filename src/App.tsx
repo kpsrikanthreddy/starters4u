@@ -34,7 +34,7 @@ import { CANONICAL_DOMAIN } from './config/businessInfo';
 import { FoodCategory, Order } from './types';
 import { ShoppingBag, ArrowRight, Loader2 } from 'lucide-react';
 import { GlobalErrorBoundary } from './components/GlobalErrorBoundary';
-import { lazyWithRetry, clearChunkReloadFlag } from './utils/chunkReloadRecovery';
+import { lazyWithRetry } from './utils/chunkReloadRecovery';
 
 // Code-split heavy interactive and admin components with automatic deployment chunk-reload recovery
 const AdminApp = lazyWithRetry(() =>
@@ -511,11 +511,6 @@ export default function App({ initialPath }: { initialPath?: string }) {
     currentPath.startsWith('/admin') ||
     currentHost.startsWith('admin.') ||
     currentPath.startsWith('/restaurant-admin');
-
-  // Clear any dynamic chunk reload guard after successful application mount
-  useEffect(() => {
-    clearChunkReloadFlag();
-  }, []);
 
   // Ensure administrative and platform admin portals immediately set private noindex directives
   useEffect(() => {
