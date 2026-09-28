@@ -12,8 +12,6 @@ import {
   Store,
 } from 'lucide-react';
 import { OrderCalendarView } from './OrderCalendarView';
-import { GoogleMapsLiveTracker, MOZZ_RESTAURANT_LOCATION } from './GoogleMapsLiveTracker';
-import { TrackingMapErrorBoundary } from './TrackingMapErrorBoundary';
 
 interface LiveOrderTrackerProps {
   onBackToMenu: () => void;
@@ -447,6 +445,9 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                   <h2 className="text-lg sm:text-xl font-black text-slate-900 mt-1">
                     {getStatusHeadline()}
                   </h2>
+                  <div className="mt-2 text-sm sm:text-base font-black text-rose-700 whitespace-nowrap">
+                    Order {displayOrderNumber}
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -466,31 +467,6 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                 <div className="leading-relaxed font-medium">
                   Live rider location is not currently available. Order progress below reflects updates from the restaurant.
                 </div>
-              </div>
-
-              {/* Google Maps Map displaying Restaurant location & Confirmed delivery location */}
-              <div className="mb-4">
-                <TrackingMapErrorBoundary
-                  restaurantLocation={{
-                    name: restaurantName || 'MOZZ Pizzateria',
-                    lat: MOZZ_RESTAURANT_LOCATION.lat,
-                    lng: MOZZ_RESTAURANT_LOCATION.lng,
-                  }}
-                  customerLocation={
-                    order.customer?.latitude && order.customer?.longitude
-                      ? {
-                          lat: Number(order.customer.latitude),
-                          lng: Number(order.customer.longitude),
-                          address: detectedAddress || order.customer?.address,
-                        }
-                      : null
-                  }
-                >
-                  <GoogleMapsLiveTracker
-                    order={order}
-                    onAddressDetected={(address) => setDetectedAddress(address)}
-                  />
-                </TrackingMapErrorBoundary>
               </div>
 
               {/* Status Sync Footer */}
@@ -550,11 +526,11 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
             {/* Genuine Kitchen / Order-Status Timeline - ONLY visible for active orders */}
             {isActive && (
               <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-rose-600">
-                    Kitchen & Order Progress Timeline
+                    Kitchen & Order Timeline
                   </h3>
-                  <span className="text-[10px] text-slate-400 font-mono">
+                  <span className="text-xs font-black text-rose-700 whitespace-nowrap">
                     Order {displayOrderNumber}
                   </span>
                 </div>
