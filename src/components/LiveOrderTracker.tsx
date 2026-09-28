@@ -151,17 +151,6 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
 
   const order = sessionOrder || activeOrder || (activeOrderId ? orders.find((o) => o.id === activeOrderId) : null);
 
-  // Table QR (dine-in) and Counter QR (takeaway) orders happen at the restaurant.
-  // Delivery maps, rider navigation and delivery tracking are therefore irrelevant.
-  const isOnPremiseOrder = Boolean(
-    order && (
-      order.entrySource === 'table_qr' ||
-      order.entrySource === 'counter_qr' ||
-      order.orderType === 'dine_in' ||
-      order.orderType === 'takeaway'
-    )
-  );
-
   // Synchronize URL with active order for seamless bookmarking/refreshing
   useEffect(() => {
     if (order?.id && typeof window !== 'undefined') {
@@ -260,7 +249,7 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
           setActiveOrderId(ord.id);
           setSearchOrderId('');
         } else {
-          alert(`Order #${query} not found. Please check the order number.`);
+          alert(`Order ${query} not found. Please check the order number.`);
         }
       });
     }
@@ -329,44 +318,15 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
     }
   };
 
-  const ON_PREMISE_STAGES = [
-    STAGES[0],
-    STAGES[1],
-    STAGES[2],
-    {
-      status: 'packing' as OrderStatus,
-      title: order.orderType === 'dine_in' ? 'Final Preparation' : 'Packing & Quality Check',
-      subtitle: order.orderType === 'dine_in'
-        ? 'Final kitchen checks before serving at your table'
-        : 'Final quality check and packing for counter pickup',
-      icon: '📦',
-    },
-    {
-      status: 'ready' as OrderStatus,
-      title: order.orderType === 'dine_in' ? 'Ready to Serve' : 'Ready for Pickup',
-      subtitle: order.orderType === 'dine_in'
-        ? 'Your order is ready to be served at your table'
-        : 'Your takeaway order is ready at the counter',
-      icon: '✅',
-    },
-    {
-      status: 'completed' as OrderStatus,
-      title: 'Order Completed',
-      subtitle: order.orderType === 'dine_in'
-        ? 'Your dine-in order has been completed'
-        : 'Your counter takeaway order has been completed',
-      icon: '🎉',
-    },
-  ];
-
-  const timelineStages = isOnPremiseOrder ? ON_PREMISE_STAGES : STAGES;
-
   const currentStageIndex = getStageIndex(order.status);
   const isDelivered = order.status === 'delivered' || (order.status as string) === 'completed';
   const isCancelled = order.status === 'cancelled' || (order.status as string) === 'rejected';
   const isActive = !isDelivered && !isCancelled;
   // Cancellation is allowed ONLY while the order is in initial pending/placed state
   const isCustomerCancellable = (order.status === 'placed' || (order.status as string) === 'pending') && isActive;
+  // Customer-facing order number: prefer the restaurant order number (for example MOZZ-9105),
+  // and fall back to the internal id only for legacy orders that do not have orderNumber.
+  const displayOrderNumber = order.orderNumber || order.id;
 
   const getStatusHeadline = () => {
     switch (order.status as string) {
@@ -388,7 +348,7 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
         return 'Order Ready for Pickup';
       case 'delivered':
       case 'completed':
-        return isOnPremiseOrder ? 'Order Completed!' : 'Order Delivered to Doorstep!';
+        return 'Order Delivered to Doorstep!';
       case 'cancelled':
       case 'rejected':
         return 'Order Cancelled';
@@ -448,7 +408,7 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                 type="text"
                 value={searchOrderId}
                 onChange={(e) => setSearchOrderId(e.target.value)}
-                placeholder="Search Order # (e.g. MOZZ-8901)"
+                placeholder="Search Order No (e.g. MOZZ-8901)"
                 className="bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 placeholder-slate-400 uppercase focus:outline-none focus:border-rose-500 focus:bg-white w-full sm:w-48 transition"
               />
               <button
@@ -473,8 +433,7 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
       ) : (
         /* Main Tracking Grid */
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Kitchen/order status and progress timeline are shown for every order type.
-              Only delivery-specific rider/map/location content is hidden for Table QR and Counter QR. */}
+          {/* Left 7 Cols: Interactive Map & Genuine Timeline */}
           <div className="lg:col-span-7 space-y-6">
             {/* Google Maps Order Tracking Card */}
             <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm relative overflow-hidden">
@@ -501,41 +460,38 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                 </div>
               </div>
 
-              {/* Delivery-only telemetry and map. Hidden for Table QR and Counter QR orders. */}
-              {!isOnPremiseOrder && (
-                <>
-                  <div className="mb-4 p-3 bg-amber-50/90 border border-amber-200 rounded-2xl flex items-start gap-2.5 text-xs text-amber-900">
-                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                    <div className="leading-relaxed font-medium">
-                      Live rider location is not currently available. Order progress below reflects updates from the restaurant.
-                    </div>
-                  </div>
+              {/* Required Telemetry Disclaimer Notice */}
+              <div className="mb-4 p-3 bg-amber-50/90 border border-amber-200 rounded-2xl flex items-start gap-2.5 text-xs text-amber-900">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="leading-relaxed font-medium">
+                  Live rider location is not currently available. Order progress below reflects updates from the restaurant.
+                </div>
+              </div>
 
-                  <div className="mb-4">
-                    <TrackingMapErrorBoundary
-                      restaurantLocation={{
-                        name: restaurantName || 'MOZZ Pizzateria',
-                        lat: MOZZ_RESTAURANT_LOCATION.lat,
-                        lng: MOZZ_RESTAURANT_LOCATION.lng,
-                      }}
-                      customerLocation={
-                        order.customer?.latitude && order.customer?.longitude
-                          ? {
-                              lat: Number(order.customer.latitude),
-                              lng: Number(order.customer.longitude),
-                              address: detectedAddress || order.customer?.address,
-                            }
-                          : null
-                      }
-                    >
-                      <GoogleMapsLiveTracker
-                        order={order}
-                        onAddressDetected={(address) => setDetectedAddress(address)}
-                      />
-                    </TrackingMapErrorBoundary>
-                  </div>
-                </>
-              )}
+              {/* Google Maps Map displaying Restaurant location & Confirmed delivery location */}
+              <div className="mb-4">
+                <TrackingMapErrorBoundary
+                  restaurantLocation={{
+                    name: restaurantName || 'MOZZ Pizzateria',
+                    lat: MOZZ_RESTAURANT_LOCATION.lat,
+                    lng: MOZZ_RESTAURANT_LOCATION.lng,
+                  }}
+                  customerLocation={
+                    order.customer?.latitude && order.customer?.longitude
+                      ? {
+                          lat: Number(order.customer.latitude),
+                          lng: Number(order.customer.longitude),
+                          address: detectedAddress || order.customer?.address,
+                        }
+                      : null
+                  }
+                >
+                  <GoogleMapsLiveTracker
+                    order={order}
+                    onAddressDetected={(address) => setDetectedAddress(address)}
+                  />
+                </TrackingMapErrorBoundary>
+              </div>
 
               {/* Status Sync Footer */}
               <div className="mt-4 pt-3 border-t border-slate-200 flex items-center justify-between">
@@ -568,10 +524,10 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                   ✓
                 </div>
                 <h3 className="text-base sm:text-lg font-bold text-emerald-900">
-                  {isOnPremiseOrder ? 'Order completed successfully. Thank you for ordering from MOZZ!' : 'Order delivered successfully. Thank you for ordering from MOZZ!'}
+                  Order {displayOrderNumber} completed successfully. Thank you for ordering from MOZZ!
                 </h3>
                 <p className="text-xs text-emerald-700 font-medium">
-                  {isOnPremiseOrder ? 'Your restaurant order is complete. We hope you enjoyed your meal!' : 'Your food was delivered fresh & hot. We hope you enjoyed your meal!'}
+                  Your food was delivered fresh & hot. We hope you enjoyed your meal!
                 </p>
               </div>
             )}
@@ -599,19 +555,19 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                     Kitchen & Order Progress Timeline
                   </h3>
                   <span className="text-[10px] text-slate-400 font-mono">
-                    Order #{order.id}
+                    Order {displayOrderNumber}
                   </span>
                 </div>
 
                 <div className="space-y-4">
-                  {timelineStages.map((stage, idx) => {
+                  {STAGES.map((stage, idx) => {
                     const isPassed = idx <= currentStageIndex;
                     const isCurrent = idx === currentStageIndex;
 
                     return (
                       <div key={stage.status} className="flex items-start gap-4 relative">
                         {/* Connecting line */}
-                        {idx < timelineStages.length - 1 && (
+                        {idx < STAGES.length - 1 && (
                           <div
                             className={`absolute left-4 top-8 bottom-0 w-0.5 -ml-px transition-colors ${
                               idx < currentStageIndex ? 'bg-rose-500' : 'bg-slate-200'
@@ -658,16 +614,16 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
             )}
           </div>
 
-          {/* Order Summary Receipt & Details */}
+          {/* Right 5 Cols: Order Summary Receipt & Details */}
           <div className="lg:col-span-5 space-y-6">
             {/* Order Details Receipt Card */}
             <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-5">
               <div className="flex items-center justify-between pb-4 border-b border-slate-200">
                 <div>
                   <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    Order Reference
+                    Order No
                   </div>
-                  <div className="text-lg font-black text-rose-600 font-mono">#{order.id}</div>
+                  <div className="text-lg font-black text-rose-600 font-mono">#{displayOrderNumber}</div>
                 </div>
 
                 <div className="text-right">
@@ -682,28 +638,22 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                 </div>
               </div>
 
-              {/* Customer / fulfilment details */}
+              {/* Customer Details: Confirmed delivery location */}
               <div className="text-xs space-y-1.5 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-slate-700">
-                    {isOnPremiseOrder ? (order.entrySource === 'table_qr' || order.orderType === 'dine_in' ? 'Dine-in order:' : 'Counter takeaway order:') : 'Confirmed delivery location:'}
+                  <span className="font-bold text-slate-700">Confirmed delivery location:</span>
+                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
+                    <MapPin className="w-3 h-3 text-emerald-600" />
+                    Confirmed location
                   </span>
-                  {!isOnPremiseOrder && (
-                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
-                      <MapPin className="w-3 h-3 text-emerald-600" />
-                      Confirmed location
-                    </span>
-                  )}
                 </div>
                 <div className="text-slate-900 font-semibold">
                   {order.customer?.name || 'Valued Customer'} {order.customer?.phone ? `(${order.customer.phone})` : ''}
                 </div>
-                {!isOnPremiseOrder && (
-                  <div className="text-slate-600 text-[11px] leading-relaxed">
-                    {detectedAddress || order.customer?.address || 'Delivery Address'}
-                  </div>
-                )}
-                {!isOnPremiseOrder && order.customer?.latitude && order.customer?.longitude && (
+                <div className="text-slate-600 text-[11px] leading-relaxed">
+                  {detectedAddress || order.customer?.address || 'Delivery Address'}
+                </div>
+                {order.customer?.latitude && order.customer?.longitude && (
                   <div className="text-[10px] font-mono text-emerald-600">
                     GPS Coordinates: {Number(order.customer.latitude).toFixed(6)}, {Number(order.customer.longitude).toFixed(6)}
                   </div>
@@ -799,7 +749,7 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
               {/* WhatsApp Support */}
               <div className="pt-2">
                 <a
-                  href={`https://wa.me/?text=Hi%20MOZZ%20Team%2C%20I%20am%20tracking%20my%20Order%20%23${order.id}%20total%20INR%20${(Number(order.grandTotal) || 0).toFixed(2)}`}
+                  href={`https://wa.me/?text=Hi%20MOZZ%20Team%2C%20I%20am%20tracking%20my%20Order%20%23${encodeURIComponent(displayOrderNumber)}%20total%20INR%20${(Number(order.grandTotal) || 0).toFixed(2)}`}
                   target="_blank"
                   rel="noreferrer"
                   className="w-full py-2.5 px-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold flex items-center justify-center gap-1.5 border border-emerald-200 transition"
@@ -826,7 +776,7 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                     disabled={isCancelling}
                     onClick={async () => {
                       if (!order?.id || isCancelling) return;
-                      if (window.confirm(`Are you sure you want to cancel Order #${order.id}?`)) {
+                      if (window.confirm(`Are you sure you want to cancel Order ${displayOrderNumber}?`)) {
                         setIsCancelling(true);
                         setCancellationError(null);
                         try {
