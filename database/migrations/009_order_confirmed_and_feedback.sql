@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS customer_feedback_requests (
     restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
     order_id UUID UNIQUE NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     customer_phone VARCHAR(50) NOT NULL,
-    template_name VARCHAR(100) NOT NULL DEFAULT 'glossylooks_customer_feedback',
+    template_name VARCHAR(100) NOT NULL DEFAULT 'starters4u_order_feedback',
     scheduled_at TIMESTAMPTZ NOT NULL,
     sent_at TIMESTAMPTZ,
     whatsapp_message_id VARCHAR(255),
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS customer_feedback_requests (
 -- Idempotent updates for existing tables
 DO $$
 BEGIN
-    ALTER TABLE customer_feedback_requests ALTER COLUMN template_name SET DEFAULT 'glossylooks_customer_feedback';
+    ALTER TABLE customer_feedback_requests ALTER COLUMN template_name SET DEFAULT 'starters4u_order_feedback';
     ALTER TABLE customer_feedback_requests DROP CONSTRAINT IF EXISTS customer_feedback_requests_status_check;
     ALTER TABLE customer_feedback_requests ADD CONSTRAINT customer_feedback_requests_status_check
         CHECK (status IN ('SCHEDULED', 'SENDING', 'SENT', 'DELIVERED', 'READ', 'FAILED'));

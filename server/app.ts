@@ -31,6 +31,7 @@ import {
   getFeedbackRequestForOrder,
   processDueFeedbackRequests,
   updateFeedbackStatusByMessageId,
+  processCustomerFeedbackResponse,
 } from './services/feedbackService.js';
 import { requireAuth, requireRole, verifyAuthToken } from './middleware/authMiddleware.js';
 import { requireRestaurantTenant, requireRestaurantRole, requirePlatformAdmin } from './middleware/tenantMiddleware.js';
@@ -2691,7 +2692,7 @@ export function createApp(): express.Application {
   );
 
   // Meta WhatsApp Cloud API Webhook Verification
-  app.get(['/api/webhooks/whatsapp', '/api/webhook/whatsapp'], (req, res) => {
+  app.get(['/api/whatsapp/webhook', '/api/webhooks/whatsapp', '/api/webhook/whatsapp'], (req, res) => {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
@@ -2708,14 +2709,29 @@ export function createApp(): express.Application {
     return res.status(403).send('Forbidden: Verification token mismatch');
   });
 
-  // Meta WhatsApp Cloud API Webhook Event Handler (Status updates: sent, delivered, read, failed)
-  app.post(['/api/webhooks/whatsapp', '/api/webhook/whatsapp'], async (req, res) => {
+  // Meta WhatsApp Cloud API Webhook Event Handler (Status updates & Customer quick replies)
+  app.post(['/api/whatsapp/webhook', '/api/webhooks/whatsapp', '/api/webhook/whatsapp'], async (req, res) => {
     try {
+      const appSecret = process.env.WHATSAPP_APP_SECRET || process.env.META_APP_SECRET;
+      const signature = req.headers['x-hub-signature-256'] as string;
+
+      // Optional Meta signature verification if WHATSAPP_APP_SECRET is configured
+      if (appSecret && signature) {
+        const rawBody = (req as any).rawBody || JSON.stringify(req.body);
+        const expectedSig = `sha256=${crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex')}`;
+        if (signature !== expectedSig) {
+          console.warn('[WhatsAppWebhook] Warning: Signature verification failed');
+          return res.status(401).send('Invalid signature');
+        }
+      }
+
       const body = req.body;
       if (body?.object === 'whatsapp_business_account' || body?.entry) {
         for (const entry of body.entry || []) {
           for (const change of entry.changes || []) {
             const value = change?.value;
+
+            // 1. Handle Message Status Callbacks: sent, delivered, read, failed
             if (value?.statuses && Array.isArray(value.statuses)) {
               for (const statusItem of value.statuses) {
                 const messageId = statusItem.id;
@@ -2730,8 +2746,46 @@ export function createApp(): express.Application {
                 const errorMsg = statusItem.errors?.[0]?.title || statusItem.errors?.[0]?.message;
 
                 if (messageId && mappedStatus) {
-                  console.info(`[WhatsAppWebhook] Message ${messageId} status updated to ${mappedStatus}`);
                   await updateFeedbackStatusByMessageId(messageId, mappedStatus, errorMsg);
+                }
+              }
+            }
+
+            // 2. Handle Incoming Customer Responses (Quick reply buttons, interactive buttons, text replies)
+            if (value?.messages && Array.isArray(value.messages)) {
+              for (const msg of value.messages) {
+                const fromPhone = msg.from;
+                const replyMessageId = msg.id;
+                const replyContextWamid = msg.context?.id;
+
+                let buttonText: string | undefined;
+                let buttonPayload: string | undefined;
+                let textBody: string | undefined;
+
+                if (msg.type === 'button') {
+                  buttonText = msg.button?.text;
+                  buttonPayload = msg.button?.payload;
+                } else if (msg.type === 'interactive') {
+                  if (msg.interactive?.type === 'button_reply') {
+                    buttonText = msg.interactive?.button_reply?.title;
+                    buttonPayload = msg.interactive?.button_reply?.id;
+                  } else if (msg.interactive?.type === 'list_reply') {
+                    buttonText = msg.interactive?.list_reply?.title;
+                    buttonPayload = msg.interactive?.list_reply?.id;
+                  }
+                } else if (msg.type === 'text') {
+                  textBody = msg.text?.body;
+                }
+
+                if (fromPhone && replyMessageId) {
+                  await processCustomerFeedbackResponse({
+                    replyMessageId,
+                    replyContextWamid,
+                    fromPhone,
+                    buttonText,
+                    buttonPayload,
+                    textBody,
+                  });
                 }
               }
             }

@@ -55,6 +55,7 @@ export interface RestaurantSettings {
   isTakeawayEnabled: boolean;
   isDineInEnabled: boolean;
   isCounterEnabled: boolean;
+  googleReviewUrl?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -224,6 +225,7 @@ export async function getRestaurantSettings(restaurantId: string): Promise<Resta
           isTakeawayEnabled: row.is_takeaway_enabled !== false,
           isDineInEnabled: row.is_dine_in_enabled !== false,
           isCounterEnabled: row.is_counter_enabled !== false,
+          googleReviewUrl: row.google_review_url || row.r_google_review_url || undefined,
           createdAt: row.created_at,
           updatedAt: row.updated_at,
         };

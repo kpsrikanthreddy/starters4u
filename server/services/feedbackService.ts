@@ -8,7 +8,23 @@ function isPgActive(): boolean {
   return isPostgresRunning() || isPostgresConfigured() || process.env.NODE_ENV === 'production';
 }
 
-export const WHATSAPP_APPROVED_FEEDBACK_TEMPLATE = 'glossylooks_customer_feedback';
+/**
+ * Approved Meta WhatsApp Template:
+ * Template name: starters4u_order_feedback
+ *
+ * Parameters:
+ * {{1}} = customer name
+ * {{2}} = restaurant display name
+ * {{3}} = order number
+ *
+ * Quick Reply Buttons:
+ * ⭐ Good
+ * 😐 Average
+ * 😞 Bad
+ */
+export const WHATSAPP_APPROVED_FEEDBACK_TEMPLATE = 'starters4u_order_feedback';
+
+export type FeedbackRating = 'GOOD' | 'AVERAGE' | 'BAD';
 
 export interface FeedbackRequestRecord {
   id: string;
@@ -19,20 +35,32 @@ export interface FeedbackRequestRecord {
   scheduled_at: string;
   sent_at: string | null;
   whatsapp_message_id: string | null;
-  status: 'SCHEDULED' | 'SENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
+  status: 'SCHEDULED' | 'SENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED' | 'RESPONDED';
   error_message: string | null;
+  feedback_rating?: FeedbackRating | null;
+  feedback_received_at?: string | null;
+  feedback_reply_message_id?: string | null;
   created_at: string;
+  updated_at?: string;
 }
+
+// In-memory set to prevent duplicate handling of webhook reply messages and repeated duplicate acknowledgements
+const processedReplyMessageIds = new Set<string>();
+const duplicateAckSentRequestIds = new Set<string>();
 
 /**
  * Format mobile number for WhatsApp Business Cloud API.
- * Ensures international format (defaults to Indian +91 prefix if 10-digit number).
+ * Normalizes Indian numbers to E.164 format:
+ * 10 digit number -> 91XXXXXXXXXX
  */
 export function formatWhatsAppPhone(phone: string): string {
   const digits = (phone || '').replace(/\D/g, '');
   if (!digits) return '';
   if (digits.length === 10) {
     return `91${digits}`;
+  }
+  if (digits.length === 11 && digits.startsWith('0')) {
+    return `91${digits.slice(1)}`;
   }
   if (digits.length === 12 && digits.startsWith('91')) {
     return digits;
@@ -143,6 +171,9 @@ export async function scheduleOrderFeedback(
     whatsapp_message_id: null,
     status: 'SCHEDULED',
     error_message: null,
+    feedback_rating: null,
+    feedback_received_at: null,
+    feedback_reply_message_id: null,
     created_at: new Date().toISOString(),
   };
 
@@ -265,7 +296,6 @@ export async function getMetaApprovedTemplate(
     );
 
     if (!phoneRes.ok) {
-      console.warn('[FeedbackService] Could not resolve WABA ID from phone number ID:', await phoneRes.text());
       return null;
     }
 
@@ -281,7 +311,6 @@ export async function getMetaApprovedTemplate(
     );
 
     if (!tplRes.ok) {
-      console.warn('[FeedbackService] Could not fetch templates from WABA:', await tplRes.text());
       return null;
     }
 
@@ -295,11 +324,10 @@ export async function getMetaApprovedTemplate(
     const bodyComp = (matching.components || []).find((c: any) => c.type === 'BODY');
     const btnComp = (matching.components || []).find((c: any) => c.type === 'BUTTONS');
 
-    // Count {{1}}, {{2}} in body text
+    // Count {{1}}, {{2}}, {{3}} in body text
     const matches = bodyComp?.text ? bodyComp.text.match(/\{\{\d+\}\}/g) : null;
-    const bodyParamCount = matches ? matches.length : (bodyComp?.example?.body_text?.[0]?.length || 0);
+    const bodyParamCount = matches ? matches.length : 3;
 
-    // Check if any button URL requires parameter {{1}}
     let hasButtonUrlParam = false;
     const buttons = btnComp?.buttons || [];
     for (const btn of buttons) {
@@ -310,23 +338,24 @@ export async function getMetaApprovedTemplate(
 
     cachedTemplateInfo = {
       name: matching.name,
-      language: matching.language || 'en_US',
-      bodyParamCount,
+      language: matching.language || 'en',
+      bodyParamCount: bodyParamCount || 3,
       hasButtonUrlParam,
       buttons,
     };
 
-    console.info(`[FeedbackService] Resolved approved Meta template: ${templateName} (${cachedTemplateInfo.language}) with ${bodyParamCount} body params.`);
     return cachedTemplateInfo;
   } catch (err: any) {
-    console.warn('[FeedbackService] Failed querying Meta Graph API for template info:', err.message);
     return null;
   }
 }
 
 /**
  * Builds Meta Cloud API template components matching approved schema.
- * Ensures no parameters or buttons are invented.
+ * starters4u_order_feedback expects 3 body parameters:
+ * {{1}} = customer name
+ * {{2}} = restaurant display name
+ * {{3}} = order number
  */
 function buildApprovedTemplateComponents(
   bodyParamCount: number,
@@ -336,21 +365,18 @@ function buildApprovedTemplateComponents(
   hasButtonUrlParam: boolean = false
 ): any[] {
   const components: any[] = [];
+  const count = Math.max(bodyParamCount, 3);
+  const allAvailable = [customerName, restaurantName, orderNumber];
+  const params = allAvailable.slice(0, count).map((val) => ({
+    type: 'text',
+    text: String(val || '').trim(),
+  }));
 
-  // BODY component: exactly match approved parameters
-  if (bodyParamCount > 0) {
-    const allAvailable = [customerName, restaurantName, orderNumber];
-    const params = allAvailable.slice(0, bodyParamCount).map((val) => ({
-      type: 'text',
-      text: String(val || '').trim(),
-    }));
-    components.push({
-      type: 'body',
-      parameters: params,
-    });
-  }
+  components.push({
+    type: 'body',
+    parameters: params,
+  });
 
-  // BUTTON component: only include if dynamic URL button requires a parameter
   if (hasButtonUrlParam) {
     components.push({
       type: 'button',
@@ -375,7 +401,7 @@ function buildApprovedTemplateComponents(
  *  2. Scheduled automatic 2-hour backend job
  *
  * Implements strict duplicate protection:
- * If already SENT, skips sending and returns the existing sent record.
+ * If already SENT or RESPONDED, skips sending and returns the existing record.
  */
 export async function sendOrderFeedback(
   orderId: string,
@@ -403,7 +429,6 @@ export async function sendOrderFeedback(
   if (isPg) {
     try {
       if (isUuid) {
-        // Preferred: lookup by orders.id UUID with tenant scoping
         if (tenantRestaurantId) {
           const res = await query(
             `SELECT * FROM orders WHERE id = $1 AND restaurant_id = $2 LIMIT 1`,
@@ -415,8 +440,6 @@ export async function sendOrderFeedback(
           orderRow = res.rows[0];
         }
       } else {
-        // Normalization if caller sent display order_number (e.g. MOZZ-9206):
-        // Do NOT query orders.id with a display order number to avoid Postgres UUID casting errors!
         if (tenantRestaurantId) {
           const res = await query(
             `SELECT * FROM orders WHERE order_number = $1 AND restaurant_id = $2 LIMIT 1`,
@@ -433,7 +456,7 @@ export async function sendOrderFeedback(
     }
   }
 
-  // Local fallback only if PostgreSQL is not active/configured
+  // Local fallback only if PostgreSQL is not active
   if (!orderRow && !isPg) {
     orderRow = inMemoryDb.orders.find((o: any) => {
       const match = o.id === rawOrderId || o.order_number === rawOrderId;
@@ -441,18 +464,11 @@ export async function sendOrderFeedback(
     });
   }
 
-  // Safe server-side diagnostic logging (no WhatsApp tokens, service keys, passwords)
-  console.info(
-    `[WhatsApp Feedback Diagnostic] Received orderId: ${rawOrderId} | Authenticated restaurant_id: ${tenantRestaurantId || orderRow?.restaurant_id || 'N/A'} | Order found: ${Boolean(orderRow)}`
-  );
-
   if (!orderRow) {
     return { success: false, status: 'FAILED', error: 'Order not found' };
   }
 
-  // Normalize resolved order UUID for customer_feedback_requests relation
   const resolvedOrderId = orderRow.id;
-
   const statusLower = (orderRow.status || '').toLowerCase();
   if (statusLower !== 'delivered' && statusLower !== 'completed') {
     return {
@@ -475,7 +491,6 @@ export async function sendOrderFeedback(
     } catch {}
   }
 
-  // Fallback to customer table if customer_id is present
   if ((!rawPhone || !customerName) && orderRow.customer_id) {
     if (isPg) {
       try {
@@ -505,7 +520,7 @@ export async function sendOrderFeedback(
   const formattedPhone = formatWhatsAppPhone(rawPhone!);
   const restaurantId = orderRow.restaurant_id;
 
-  // 2. Fetch Restaurant for dynamic multi-tenant name
+  // 2. Fetch Restaurant for dynamic multi-tenant display name
   let restaurantName = 'Starters4U Partner Restaurant';
   try {
     const restaurant = await getRestaurantSettings(restaurantId);
@@ -516,9 +531,9 @@ export async function sendOrderFeedback(
 
   const orderNumber = orderRow.order_number || `ORD-${resolvedOrderId.slice(0, 6).toUpperCase()}`;
 
-  // 3. Duplicate Protection Check
+  // 3. Duplicate Protection Check: one feedback request per order
   const existingFeedback = await getFeedbackRequestForOrder(resolvedOrderId, restaurantId);
-  if (existingFeedback && existingFeedback.status === 'SENT') {
+  if (existingFeedback && (existingFeedback.status === 'SENT' || existingFeedback.status === 'DELIVERED' || existingFeedback.status === 'READ' || existingFeedback.status === 'RESPONDED')) {
     return {
       success: true,
       status: 'SENT',
@@ -528,7 +543,6 @@ export async function sendOrderFeedback(
     };
   }
 
-  // Mark record as SENDING or insert new
   const templateName = process.env.WHATSAPP_FEEDBACK_TEMPLATE || WHATSAPP_APPROVED_FEEDBACK_TEMPLATE;
   let requestId = existingFeedback?.id || crypto.randomUUID();
 
@@ -566,6 +580,9 @@ export async function sendOrderFeedback(
         whatsapp_message_id: null,
         status: 'SENDING',
         error_message: null,
+        feedback_rating: null,
+        feedback_received_at: null,
+        feedback_reply_message_id: null,
         created_at: new Date().toISOString(),
       });
     }
@@ -582,12 +599,9 @@ export async function sendOrderFeedback(
     if (token && phoneNumberId) {
       const url = `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`;
 
-      // 1. Fetch approved template schema directly from Meta Graph API if available
       const metaTpl = await getMetaApprovedTemplate(token, phoneNumberId, templateName);
-
-      // Language code configured for this approved template (defaults to approved language or en_US)
-      let languageCode = process.env.WHATSAPP_TEMPLATE_LANGUAGE || metaTpl?.language || 'en_US';
-      let bodyParamCount = metaTpl ? metaTpl.bodyParamCount : 1;
+      let languageCode = process.env.WHATSAPP_TEMPLATE_LANGUAGE || metaTpl?.language || 'en';
+      let bodyParamCount = metaTpl ? metaTpl.bodyParamCount : 3;
       let hasButtonParam = metaTpl ? metaTpl.hasButtonUrlParam : false;
 
       let components = buildApprovedTemplateComponents(
@@ -621,7 +635,7 @@ export async function sendOrderFeedback(
 
       let resData = await response.json().catch(() => null);
 
-      // Automatic adaptation if Meta returns parameter count mismatch (132000) or language mismatch (132001)
+      // Automatic adaptation if Meta returns language mismatch (132001) or parameter count mismatch (132000)
       if (!response.ok && resData?.error) {
         const errCode = resData.error.code;
         const errDetail = resData.error.error_data?.details || resData.error.message || '';
@@ -629,14 +643,14 @@ export async function sendOrderFeedback(
 
         let retryNeeded = false;
 
-        // Language mismatch (e.g. template is in 'en' but sent 'en_US' or vice-versa)
+        // Language code adaptation
         if (errCode === 132001 || errDetail.toLowerCase().includes('translation') || errDetail.toLowerCase().includes('language')) {
-          languageCode = languageCode === 'en_US' ? 'en' : 'en_US';
+          languageCode = languageCode === 'en' ? 'en_US' : 'en';
           sendPayload.template.language = { code: languageCode };
           retryNeeded = true;
         }
 
-        // Parameter count mismatch (e.g. "expected 0 got 1", or "expected 1 got 0")
+        // Parameter count adaptation
         if (errCode === 132000 || errDetail.toLowerCase().includes('parameters')) {
           const matchExpected = errDetail.match(/expected\s+(\d+)/i);
           if (matchExpected) {
@@ -652,7 +666,6 @@ export async function sendOrderFeedback(
         }
 
         if (retryNeeded) {
-          console.info(`[FeedbackService] Retrying Meta dispatch with adapted payload: language=${languageCode}, bodyParams=${bodyParamCount}`);
           response = await fetch(url, {
             method: 'POST',
             headers: {
@@ -685,8 +698,7 @@ export async function sendOrderFeedback(
       whatsappMessageId = `wamid.HBg${Date.now()}${crypto.randomBytes(4).toString('hex')}`;
     }
 
-    // 5. Only set to SENT after Meta successfully accepts the message and returns wamid
-    // Note: Do NOT mark API acceptance as DELIVERED. SENT means Meta accepted the request.
+    // 5. Only mark request SENT after Meta successfully accepts the message and returns wamid
     if (isPg) {
       await query(
         `UPDATE customer_feedback_requests
@@ -694,7 +706,8 @@ export async function sendOrderFeedback(
              template_name = $1,
              sent_at = NOW(),
              whatsapp_message_id = $2,
-             error_message = NULL
+             error_message = NULL,
+             updated_at = NOW()
          WHERE order_id = $3`,
         [templateName, whatsappMessageId, resolvedOrderId]
       );
@@ -719,13 +732,14 @@ export async function sendOrderFeedback(
   } catch (err: any) {
     console.error('[FeedbackService] WhatsApp send failed:', err.message);
 
-    // Update Status to FAILED
+    // Update Status to FAILED with safe error message
     if (isPg) {
       await query(
         `UPDATE customer_feedback_requests
          SET status = 'FAILED',
              template_name = $1,
-             error_message = $2
+             error_message = $2,
+             updated_at = NOW()
          WHERE order_id = $3`,
         [templateName, err.message, resolvedOrderId]
       );
@@ -749,7 +763,8 @@ export async function sendOrderFeedback(
 
 /**
  * Updates feedback request status from Meta WhatsApp Cloud API webhooks.
- * Keeps delivery status handling separate: SENT -> DELIVERED -> READ -> FAILED.
+ * Keeps delivery status separate: SENT -> DELIVERED -> READ -> FAILED.
+ * Does not overwrite status if already 'RESPONDED'.
  */
 export async function updateFeedbackStatusByMessageId(
   whatsappMessageId: string,
@@ -767,8 +782,9 @@ export async function updateFeedbackStatusByMessageId(
     try {
       const res = await query(
         `UPDATE customer_feedback_requests
-         SET status = $1,
-             error_message = COALESCE($2, error_message)
+         SET status = CASE WHEN status = 'RESPONDED' THEN 'RESPONDED' ELSE $1 END,
+             error_message = COALESCE($2, error_message),
+             updated_at = NOW()
          WHERE whatsapp_message_id = $3
          RETURNING *`,
         [newStatus, errorMessage || null, whatsappMessageId]
@@ -783,12 +799,360 @@ export async function updateFeedbackStatusByMessageId(
     (r: any) => r.whatsapp_message_id === whatsappMessageId
   );
   if (inMem) {
-    inMem.status = newStatus;
+    if (inMem.status !== 'RESPONDED') {
+      inMem.status = newStatus;
+    }
     if (errorMessage) inMem.error_message = errorMessage;
     return inMem;
   }
 
   return null;
+}
+
+/**
+ * Send WhatsApp plain text message (acknowledgement, Google review prompt)
+ * Uses the 24-hour customer care window opened by the customer's response.
+ */
+export async function sendWhatsAppTextMessage(
+  toPhone: string,
+  messageText: string
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const token = process.env.WHATSAPP_API_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN || process.env.META_WHATSAPP_TOKEN;
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.WHATSAPP_BUSINESS_PHONE_NUMBER_ID;
+
+  const formattedPhone = formatWhatsAppPhone(toPhone);
+  if (!formattedPhone) return { success: false, error: 'Invalid phone number' };
+
+  if (token && phoneNumberId) {
+    try {
+      const url = `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`;
+      const payload = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: formattedPhone,
+        type: 'text',
+        text: {
+          preview_url: true,
+          body: messageText,
+        },
+      };
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        console.warn('[FeedbackService] Failed to send WhatsApp text message:', data?.error?.message);
+        return { success: false, error: data?.error?.message };
+      }
+      return { success: true, messageId: data?.messages?.[0]?.id };
+    } catch (err: any) {
+      console.warn('[FeedbackService] Error dispatching WhatsApp text message:', err.message);
+      return { success: false, error: err.message };
+    }
+  } else {
+    // Development simulation
+    console.info(`[FeedbackService Sim] WhatsApp Text Message dispatched to ${formattedPhone}:\n${messageText}`);
+    return { success: true, messageId: `wamid.text_${Date.now()}` };
+  }
+}
+
+/**
+ * Parse customer rating from incoming WhatsApp message:
+ * Approved Meta template quick reply buttons:
+ * ⭐ Good
+ * 😐 Average
+ * 😞 Bad
+ */
+export function parseFeedbackRatingFromMessage(
+  buttonText?: string,
+  payload?: string,
+  messageText?: string
+): FeedbackRating | null {
+  const text = (buttonText || payload || messageText || '').trim().toLowerCase();
+  if (!text) return null;
+
+  if (
+    text.includes('good') ||
+    text.includes('⭐') ||
+    text.includes('star') ||
+    text.includes('great') ||
+    text === '1'
+  ) {
+    return 'GOOD';
+  }
+
+  if (
+    text.includes('average') ||
+    text.includes('😐') ||
+    text.includes('okay') ||
+    text.includes('ok') ||
+    text === '2'
+  ) {
+    return 'AVERAGE';
+  }
+
+  if (
+    text.includes('bad') ||
+    text.includes('😞') ||
+    text.includes('poor') ||
+    text.includes('terrible') ||
+    text === '3'
+  ) {
+    return 'BAD';
+  }
+
+  return null;
+}
+
+export interface IncomingFeedbackReplyParams {
+  replyMessageId: string;
+  replyContextWamid?: string;
+  fromPhone: string;
+  buttonText?: string;
+  buttonPayload?: string;
+  textBody?: string;
+}
+
+/**
+ * Process incoming WhatsApp Customer Feedback Response:
+ *
+ * Implements:
+ * - Identification via strongest correlation (reply context wamid -> button payload -> customer phone)
+ * - Tenant isolation
+ * - Atomic ONE-RESPONSE-ONLY logic: only the FIRST valid rating for an order is accepted
+ * - Duplicate clicks do not overwrite the initial rating
+ * - First response acknowledgements:
+ *     GOOD: "Thank you for your feedback! We're glad you enjoyed your experience. 🙏"
+ *     AVERAGE: "Thank you for your feedback. We appreciate it and will work to improve your experience. 🙏"
+ *     BAD: "We're sorry your experience did not meet expectations. Thank you for letting us know. Our team will review your feedback."
+ * - Google review URL sent for GOOD only (tenant-specific)
+ * - Safe error handling and idempotency
+ */
+export async function processCustomerFeedbackResponse(
+  params: IncomingFeedbackReplyParams
+): Promise<{
+  success: boolean;
+  accepted: boolean;
+  rating?: FeedbackRating;
+  orderNumber?: string;
+  alreadyResponded?: boolean;
+  message?: string;
+}> {
+  const { replyMessageId, replyContextWamid, fromPhone, buttonText, buttonPayload, textBody } = params;
+
+  // Idempotency check on incoming message id
+  if (replyMessageId && processedReplyMessageIds.has(replyMessageId)) {
+    return { success: true, accepted: false, message: 'Duplicate webhook event ignored' };
+  }
+  if (replyMessageId) {
+    processedReplyMessageIds.add(replyMessageId);
+    if (processedReplyMessageIds.size > 2000) {
+      const iter = processedReplyMessageIds.values();
+      for (let i = 0; i < 500; i++) {
+        const val = iter.next().value;
+        if (val) processedReplyMessageIds.delete(val);
+      }
+    }
+  }
+
+  const rating = parseFeedbackRatingFromMessage(buttonText, buttonPayload, textBody);
+  if (!rating) {
+    return { success: false, accepted: false, message: 'No valid rating recognized' };
+  }
+
+  const isPg = isPgActive();
+  const normalizedPhone = formatWhatsAppPhone(fromPhone);
+
+  // 1. Resolve Feedback Record using strongest correlation
+  let feedbackRecord: any = null;
+  let orderNumber: string = 'your order';
+  let googleReviewUrl: string | null = null;
+  let restaurantDisplayName: string = 'our restaurant';
+
+  if (isPg) {
+    try {
+      // Priority 1: Replied-to context WhatsApp message ID
+      if (replyContextWamid) {
+        const res = await query(
+          `SELECT cfr.*, o.order_number, r.name as restaurant_name,
+                  COALESCE(s.display_name, r.name) as display_name,
+                  COALESCE(s.google_review_url, r.google_review_url) as google_review_url
+           FROM customer_feedback_requests cfr
+           JOIN orders o ON cfr.order_id = o.id
+           JOIN restaurants r ON cfr.restaurant_id = r.id
+           LEFT JOIN restaurant_settings s ON r.id = s.restaurant_id
+           WHERE cfr.whatsapp_message_id = $1
+           LIMIT 1`,
+          [replyContextWamid]
+        );
+        if (res.rows[0]) {
+          feedbackRecord = res.rows[0];
+        }
+      }
+
+      // Priority 2: Button payload if it contains feedback request UUID or order UUID
+      if (!feedbackRecord && buttonPayload && UUID_REGEX.test(buttonPayload.trim())) {
+        const res = await query(
+          `SELECT cfr.*, o.order_number, r.name as restaurant_name,
+                  COALESCE(s.display_name, r.name) as display_name,
+                  COALESCE(s.google_review_url, r.google_review_url) as google_review_url
+           FROM customer_feedback_requests cfr
+           JOIN orders o ON cfr.order_id = o.id
+           JOIN restaurants r ON cfr.restaurant_id = r.id
+           LEFT JOIN restaurant_settings s ON r.id = s.restaurant_id
+           WHERE cfr.id = $1 OR cfr.order_id = $1
+           LIMIT 1`,
+          [buttonPayload.trim()]
+        );
+        if (res.rows[0]) {
+          feedbackRecord = res.rows[0];
+        }
+      }
+
+      // Priority 3: Fallback by customer phone to most recent active feedback request
+      if (!feedbackRecord && normalizedPhone) {
+        const res = await query(
+          `SELECT cfr.*, o.order_number, r.name as restaurant_name,
+                  COALESCE(s.display_name, r.name) as display_name,
+                  COALESCE(s.google_review_url, r.google_review_url) as google_review_url
+           FROM customer_feedback_requests cfr
+           JOIN orders o ON cfr.order_id = o.id
+           JOIN restaurants r ON cfr.restaurant_id = r.id
+           LEFT JOIN restaurant_settings s ON r.id = s.restaurant_id
+           WHERE cfr.customer_phone = $1
+           ORDER BY cfr.created_at DESC
+           LIMIT 1`,
+          [normalizedPhone]
+        );
+        if (res.rows[0]) {
+          feedbackRecord = res.rows[0];
+        }
+      }
+    } catch (err: any) {
+      console.error('[FeedbackService] Error finding feedback record in PostgreSQL:', err.message);
+    }
+  }
+
+  // In-memory fallback
+  if (!feedbackRecord && !isPg) {
+    const list = inMemoryDb.customer_feedback_requests || [];
+    feedbackRecord = list.find((r: any) =>
+      (replyContextWamid && r.whatsapp_message_id === replyContextWamid) ||
+      (normalizedPhone && r.customer_phone === normalizedPhone)
+    );
+  }
+
+  if (!feedbackRecord) {
+    console.warn(`[FeedbackService] Could not resolve feedback request for incoming reply from ${fromPhone}`);
+    return { success: false, accepted: false, message: 'Feedback request not found' };
+  }
+
+  orderNumber = feedbackRecord.order_number || `Order-${(feedbackRecord.order_id || '').slice(0, 6).toUpperCase()}`;
+  googleReviewUrl = feedbackRecord.google_review_url || null;
+  restaurantDisplayName = feedbackRecord.display_name || feedbackRecord.restaurant_name || 'Starters4U';
+
+  const feedbackRequestId = feedbackRecord.id;
+
+  // 2. ATOMIC ONE-RESPONSE-ONLY LOGIC
+  // Only the FIRST valid rating for an order is accepted.
+  // UPDATE customer_feedback_requests WHERE id = $1 AND feedback_rating IS NULL
+  let acceptedFirstResponse = false;
+
+  if (isPg) {
+    try {
+      const updateRes = await query(
+        `UPDATE customer_feedback_requests
+         SET feedback_rating = $1,
+             feedback_received_at = NOW(),
+             feedback_reply_message_id = $2,
+             status = 'RESPONDED',
+             updated_at = NOW()
+         WHERE id = $3
+           AND feedback_rating IS NULL
+         RETURNING id, feedback_rating`,
+        [rating, replyMessageId || null, feedbackRequestId]
+      );
+
+      // Exactly 1 row updated means this is the accepted first response
+      acceptedFirstResponse = updateRes.rowCount === 1;
+    } catch (err: any) {
+      console.error('[FeedbackService] Error atomically updating feedback rating in DB:', err.message);
+      return { success: false, accepted: false, message: 'Database error recording rating' };
+    }
+  } else {
+    // In-memory atomic check
+    if (!feedbackRecord.feedback_rating) {
+      feedbackRecord.feedback_rating = rating;
+      feedbackRecord.feedback_received_at = new Date().toISOString();
+      feedbackRecord.feedback_reply_message_id = replyMessageId || null;
+      feedbackRecord.status = 'RESPONDED';
+      acceptedFirstResponse = true;
+    } else {
+      acceptedFirstResponse = false;
+    }
+  }
+
+  // 3. Handle First Response vs. Duplicate Click
+  if (acceptedFirstResponse) {
+    console.info(`[FeedbackService] Accepted FIRST feedback response: ${rating} for order ${orderNumber}`);
+
+    // Build Acknowledgement Message
+    let ackMessage = '';
+    if (rating === 'GOOD') {
+      ackMessage = "Thank you for your feedback! We're glad you enjoyed your experience. 🙏";
+      // Requirement 9: GOOGLE REVIEW FOR GOOD ONLY
+      // If configured for this specific restaurant tenant, send the review link
+      if (googleReviewUrl && googleReviewUrl.trim().startsWith('http')) {
+        ackMessage += `\n\nWe'd love it if you could also share your experience on Google:\n${googleReviewUrl.trim()}`;
+      }
+    } else if (rating === 'AVERAGE') {
+      ackMessage = "Thank you for your feedback. We appreciate it and will work to improve your experience. 🙏";
+    } else if (rating === 'BAD') {
+      ackMessage = "We're sorry your experience did not meet expectations. Thank you for letting us know. Our team will review your feedback.";
+    }
+
+    // Send acknowledgement via WhatsApp text message
+    if (ackMessage && feedbackRecord.customer_phone) {
+      await sendWhatsAppTextMessage(feedbackRecord.customer_phone, ackMessage);
+    }
+
+    return {
+      success: true,
+      accepted: true,
+      rating,
+      orderNumber,
+    };
+  } else {
+    // Duplicate click: do NOT overwrite the saved rating!
+    console.info(`[FeedbackService] Duplicate click for order ${orderNumber}. Existing rating kept: ${feedbackRecord.feedback_rating}`);
+
+    // Requirement 7: For duplicate clicks, do not change the saved rating.
+    // Optionally send a short acknowledgement once: "Thank you. Your feedback for Order {{3}} has already been recorded."
+    // Avoid repeatedly sending this acknowledgement for every duplicate click.
+    if (!duplicateAckSentRequestIds.has(feedbackRequestId)) {
+      duplicateAckSentRequestIds.add(feedbackRequestId);
+      const duplicateMsg = `Thank you. Your feedback for ${orderNumber} has already been recorded.`;
+      if (feedbackRecord.customer_phone) {
+        await sendWhatsAppTextMessage(feedbackRecord.customer_phone, duplicateMsg);
+      }
+    }
+
+    return {
+      success: true,
+      accepted: false,
+      alreadyResponded: true,
+      rating: feedbackRecord.feedback_rating,
+      orderNumber,
+      message: 'Feedback already recorded for this order',
+    };
+  }
 }
 
 /**
@@ -807,7 +1171,8 @@ export async function processDueFeedbackRequests(): Promise<{ processed: number;
       );
       dueOrderIds = res.rows.map((r: any) => r.order_id);
     } catch (err: any) {
-      console.error('[FeedbackService] Error querying due feedback requests:', err.message);
+      console.warn('[FeedbackService] Notice querying due feedback requests:', err.message);
+      return { processed: 0, succeeded: 0, failed: 0 };
     }
   } else {
     const now = new Date().toISOString();

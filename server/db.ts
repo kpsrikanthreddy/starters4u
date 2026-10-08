@@ -12,7 +12,7 @@ const { Pool } = pg;
 
 // Detect database connection URL from environment variables
 export function getDatabaseUrl(): string | undefined {
-  return (
+  const rawUrl = (
     process.env.DATABASE_URL ||
     process.env.POSTGRES_URL ||
     process.env.SUPABASE_DATABASE_URL ||
@@ -21,6 +21,22 @@ export function getDatabaseUrl(): string | undefined {
     process.env.POSTGRES_PRISMA_URL ||
     process.env.POSTGRES_URL_NON_POOLING
   );
+  if (!rawUrl) return undefined;
+
+  try {
+    const parsed = new URL(rawUrl);
+    // Supabase Supavisor Pooler optimization:
+    // If connecting to *.pooler.supabase.com on port 5432 (session mode),
+    // switch to port 6543 (transaction mode) to prevent EMAXCONNSESSION (pool_size: 15) exhaustion.
+    if (parsed.hostname.includes('pooler.supabase.com') && (parsed.port === '5432' || !parsed.port)) {
+      parsed.port = '6543';
+      return parsed.toString();
+    }
+  } catch {
+    // If URL cannot be parsed by URL parser, return as is
+  }
+
+  return rawUrl;
 }
 
 export function isPostgresConfigured(): boolean {
@@ -57,13 +73,14 @@ export function getDbPool(): pg.Pool | null {
     const newPool = new Pool({
       connectionString: dbUrl,
       ssl: isLocal ? false : { rejectUnauthorized: false },
-      max: parseInt(process.env.PG_MAX_POOL || '10', 10), // Max clients in pool
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
+      max: parseInt(process.env.PG_MAX_POOL || '4', 10), // Lean pool size to prevent exceeding session/pool limits
+      idleTimeoutMillis: 5000, // Release idle clients back to pool quickly (5s)
+      connectionTimeoutMillis: 8000,
+      allowExitOnIdle: true,
     });
 
     newPool.on('error', (err) => {
-      console.error('[DB] Unexpected error on idle PostgreSQL client:', err);
+      console.warn('[DB] Notice on idle PostgreSQL client:', err.message);
     });
 
     globalThis.__pgPool = newPool;
@@ -632,24 +649,41 @@ export const inMemoryDb: InMemoryDbState = {
 // In-memory store starts with zero mock/sample orders
 // No fake, mock, demo, or fallback orders are ever seeded in memory
 
-// Database Query Wrapper
+// Database Query Wrapper with automatic transient pool error retry
 export async function query(text: string, params: any[] = []): Promise<{ rows: any[]; rowCount: number }> {
   const currentPool = getDbPool();
   if (currentPool) {
-    try {
-      const res = await currentPool.query(text, params);
-      isPostgresActive = true;
-      globalThis.__isPostgresActive = true;
-      if (Array.isArray(res)) {
-        const lastResult = res[res.length - 1];
-        const rows = lastResult?.rows || [];
-        const rowCount = lastResult?.rowCount ?? rows.length;
-        return { rows, rowCount };
+    let attempts = 0;
+    const maxAttempts = 3;
+    while (attempts < maxAttempts) {
+      attempts++;
+      try {
+        const res = await currentPool.query(text, params);
+        isPostgresActive = true;
+        globalThis.__isPostgresActive = true;
+        if (Array.isArray(res)) {
+          const lastResult = res[res.length - 1];
+          const rows = lastResult?.rows || [];
+          const rowCount = lastResult?.rowCount ?? rows.length;
+          return { rows, rowCount };
+        }
+        return { rows: res.rows || [], rowCount: res.rowCount ?? (res.rows ? res.rows.length : 0) };
+      } catch (err: any) {
+        const isTransientPoolError =
+          err.message?.includes('EMAXCONNSESSION') ||
+          err.message?.includes('max clients reached') ||
+          err.message?.includes('timeout exceeded when trying to connect') ||
+          err.message?.includes('Connection terminated unexpectedly');
+
+        if (isTransientPoolError && attempts < maxAttempts) {
+          console.warn(`[DB Query Notice] Transient connection error (${err.message}). Retrying in ${attempts * 150}ms...`);
+          await new Promise((resolve) => setTimeout(resolve, attempts * 150));
+          continue;
+        }
+
+        console.error('[DB Query Error]', { text: text.slice(0, 100), error: err.message });
+        throw err;
       }
-      return { rows: res.rows || [], rowCount: res.rowCount ?? (res.rows ? res.rows.length : 0) };
-    } catch (err: any) {
-      console.error('[DB Query Error]', { text: text.slice(0, 100), error: err.message });
-      throw err;
     }
   }
 
@@ -826,6 +860,7 @@ export async function initializeDatabase(): Promise<{ success: boolean; mode: st
           'migrations/006_payment_audit_and_restaurant_lifecycle.sql',
           'migrations/007_direct_upi_payment_attempts.sql',
           'migrations/009_order_confirmed_and_feedback.sql',
+          'migrations/010_starters4u_order_feedback.sql',
         ];
 
         for (const relMig of migrationFiles) {

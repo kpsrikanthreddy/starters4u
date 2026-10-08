@@ -276,6 +276,9 @@ export async function assembleOrderObject(
           sentAt: feedbackRecord.sent_at ? new Date(feedbackRecord.sent_at).toISOString() : undefined,
           whatsappMessageId: feedbackRecord.whatsapp_message_id || undefined,
           errorMessage: feedbackRecord.error_message || undefined,
+          feedbackRating: feedbackRecord.feedback_rating || undefined,
+          feedbackReceivedAt: feedbackRecord.feedback_received_at ? new Date(feedbackRecord.feedback_received_at).toISOString() : undefined,
+          feedbackReplyMessageId: feedbackRecord.feedback_reply_message_id || undefined,
         }
       : undefined,
     statusHistory,

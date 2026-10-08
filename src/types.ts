@@ -172,11 +172,14 @@ export interface Order {
   completedAt?: string;
   feedbackRequest?: {
     id?: string;
-    status: 'SCHEDULED' | 'SENDING' | 'SENT' | 'FAILED';
+    status: 'SCHEDULED' | 'SENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED' | 'RESPONDED';
     scheduledAt?: string;
     sentAt?: string;
     whatsappMessageId?: string;
     errorMessage?: string;
+    feedbackRating?: 'GOOD' | 'AVERAGE' | 'BAD' | null;
+    feedbackReceivedAt?: string;
+    feedbackReplyMessageId?: string;
   };
   driverDetails?: {
     name: string;

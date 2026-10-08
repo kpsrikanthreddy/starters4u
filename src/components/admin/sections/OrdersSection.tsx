@@ -493,15 +493,45 @@ export const OrdersSection: React.FC = () => {
                               </button>
                               {/* WhatsApp Feedback button beside Details button */}
                               {isDeliveredOrCompleted(ord.status) && isValidCustomerPhone(ord.customer?.phone || ord.customerPhone) && (
-                                ord.feedbackRequest?.status === 'SENT' ? (
-                                  <button
-                                    type="button"
-                                    disabled
-                                    className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-300 font-bold text-[10px] flex items-center gap-1 cursor-default opacity-95 whitespace-nowrap"
+                                ord.feedbackRequest?.feedbackRating ? (
+                                  <span
+                                    className={`px-2 py-1 rounded-lg font-bold text-[10px] border flex items-center gap-1 whitespace-nowrap ${
+                                      ord.feedbackRequest.feedbackRating === 'GOOD'
+                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                        : ord.feedbackRequest.feedbackRating === 'AVERAGE'
+                                        ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                        : 'bg-rose-50 text-rose-800 border-rose-300'
+                                    }`}
+                                    title={`Feedback received: ${ord.feedbackRequest.feedbackRating}${ord.feedbackRequest.feedbackReceivedAt ? ` at ${formatOrderDateTime(ord.feedbackRequest.feedbackReceivedAt, currentTimezone)}` : ''}`}
+                                  >
+                                    {ord.feedbackRequest.feedbackRating === 'GOOD' && '⭐ Good'}
+                                    {ord.feedbackRequest.feedbackRating === 'AVERAGE' && '😐 Average'}
+                                    {ord.feedbackRequest.feedbackRating === 'BAD' && '😞 Bad'}
+                                  </span>
+                                ) : ord.feedbackRequest?.status === 'DELIVERED' || ord.feedbackRequest?.status === 'READ' ? (
+                                  <span
+                                    className="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-300 font-bold text-[10px] flex items-center gap-1 cursor-default opacity-95 whitespace-nowrap"
+                                    title="Feedback delivered to customer on WhatsApp"
+                                  >
+                                    <span>✓✓ Delivered</span>
+                                  </span>
+                                ) : ord.feedbackRequest?.status === 'SENT' ? (
+                                  <span
+                                    className="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-300 font-bold text-[10px] flex items-center gap-1 cursor-default opacity-95 whitespace-nowrap"
                                     title={`Feedback sent on WhatsApp${ord.feedbackRequest.sentAt ? ` at ${formatOrderDateTime(ord.feedbackRequest.sentAt, currentTimezone)}` : ''}`}
                                   >
                                     <Check className="w-3 h-3 text-emerald-600 stroke-[2.5]" />
                                     <span>✓ Sent</span>
+                                  </span>
+                                ) : ord.feedbackRequest?.status === 'FAILED' ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSendWhatsAppFeedback(ord)}
+                                    disabled={sendingFeedbackOrderId === ord.id}
+                                    className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 font-bold text-[10px] flex items-center gap-1 whitespace-nowrap"
+                                    title={`Failed: ${ord.feedbackRequest.errorMessage || 'Error'}. Click to retry.`}
+                                  >
+                                    <span>Failed</span>
                                   </button>
                                 ) : (
                                   <button
@@ -591,20 +621,41 @@ export const OrdersSection: React.FC = () => {
                   </div>
                   {selectedOrder.feedbackRequest && (
                     <div className="text-right">
-                      <span className="text-[10px] text-slate-400 block uppercase font-bold">Feedback</span>
-                      <span
-                        className={`inline-block mt-0.5 text-[10px] px-2 py-0.5 rounded font-bold ${
-                          selectedOrder.feedbackRequest.status === 'SENT'
-                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                            : selectedOrder.feedbackRequest.status === 'SCHEDULED'
-                            ? 'bg-blue-100 text-blue-800 border border-blue-300'
-                            : 'bg-slate-200 text-slate-700'
-                        }`}
-                      >
-                        {selectedOrder.feedbackRequest.status === 'SENT'
-                          ? '✓ Feedback Sent'
-                          : `Scheduled (${formatOrderDateTime(selectedOrder.feedbackRequest.scheduledAt, currentTimezone)})`}
-                      </span>
+                      {selectedOrder.feedbackRequest.feedbackRating ? (
+                        <>
+                          <span className="text-[10px] text-slate-400 block uppercase font-bold">
+                            Feedback: {selectedOrder.feedbackRequest.feedbackRating === 'GOOD' ? 'Good' : selectedOrder.feedbackRequest.feedbackRating === 'AVERAGE' ? 'Average' : 'Bad'}
+                          </span>
+                          <span className="font-semibold text-slate-700 block text-[11px] leading-tight mt-0.5">
+                            Received: {formatOrderDateTime(selectedOrder.feedbackRequest.feedbackReceivedAt, currentTimezone)}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-[10px] text-slate-400 block uppercase font-bold">Feedback</span>
+                          <span
+                            className={`inline-block mt-0.5 text-[10px] px-2 py-0.5 rounded font-bold ${
+                              selectedOrder.feedbackRequest.status === 'DELIVERED' || selectedOrder.feedbackRequest.status === 'READ'
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                : selectedOrder.feedbackRequest.status === 'SENT'
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                : selectedOrder.feedbackRequest.status === 'SCHEDULED'
+                                ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                : selectedOrder.feedbackRequest.status === 'FAILED'
+                                ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                                : 'bg-slate-200 text-slate-700'
+                            }`}
+                          >
+                            {selectedOrder.feedbackRequest.status === 'DELIVERED' || selectedOrder.feedbackRequest.status === 'READ'
+                              ? '✓✓ Delivered'
+                              : selectedOrder.feedbackRequest.status === 'SENT'
+                              ? '✓ Sent'
+                              : selectedOrder.feedbackRequest.status === 'FAILED'
+                              ? 'Failed'
+                              : `Scheduled (${formatOrderDateTime(selectedOrder.feedbackRequest.scheduledAt, currentTimezone)})`}
+                          </span>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
@@ -871,14 +922,38 @@ export const OrdersSection: React.FC = () => {
                           <span>Customer WhatsApp Feedback</span>
                         </div>
                         <div className="text-[10px] text-emerald-700">
-                          {selectedOrder.feedbackRequest?.status === 'SENT'
+                          {selectedOrder.feedbackRequest?.feedbackRating
+                            ? `Received: ${formatOrderDateTime(selectedOrder.feedbackRequest.feedbackReceivedAt, currentTimezone)}`
+                            : selectedOrder.feedbackRequest?.status === 'DELIVERED' || selectedOrder.feedbackRequest?.status === 'READ'
+                            ? 'Delivered to customer WhatsApp'
+                            : selectedOrder.feedbackRequest?.status === 'SENT'
                             ? `Sent${selectedOrder.feedbackRequest.sentAt ? ` at ${formatOrderDateTime(selectedOrder.feedbackRequest.sentAt, currentTimezone)}` : ''}`
                             : selectedOrder.feedbackRequest?.status === 'SCHEDULED'
                             ? `Scheduled at ${formatOrderDateTime(selectedOrder.feedbackRequest.scheduledAt, currentTimezone)} (2 hrs post-completion)`
+                            : selectedOrder.feedbackRequest?.status === 'FAILED'
+                            ? `Failed: ${selectedOrder.feedbackRequest.errorMessage || 'Unknown error'}`
                             : 'Send feedback request template immediately'}
                         </div>
                       </div>
-                      {selectedOrder.feedbackRequest?.status === 'SENT' ? (
+                      {selectedOrder.feedbackRequest?.feedbackRating ? (
+                        <span
+                          className={`px-2.5 py-1 rounded-lg font-bold text-[10px] border flex items-center gap-1 ${
+                            selectedOrder.feedbackRequest.feedbackRating === 'GOOD'
+                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                              : selectedOrder.feedbackRequest.feedbackRating === 'AVERAGE'
+                              ? 'bg-amber-100 text-amber-800 border-amber-300'
+                              : 'bg-rose-100 text-rose-800 border-rose-300'
+                          }`}
+                        >
+                          {selectedOrder.feedbackRequest.feedbackRating === 'GOOD' && '⭐ Good'}
+                          {selectedOrder.feedbackRequest.feedbackRating === 'AVERAGE' && '😐 Average'}
+                          {selectedOrder.feedbackRequest.feedbackRating === 'BAD' && '😞 Bad'}
+                        </span>
+                      ) : selectedOrder.feedbackRequest?.status === 'DELIVERED' || selectedOrder.feedbackRequest?.status === 'READ' ? (
+                        <span className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 font-bold text-[10px] border border-emerald-300 flex items-center gap-1">
+                          <span>✓✓ Delivered</span>
+                        </span>
+                      ) : selectedOrder.feedbackRequest?.status === 'SENT' ? (
                         <span className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 font-bold text-[10px] border border-emerald-300 flex items-center gap-1">
                           <Check className="w-3 h-3 text-emerald-700 stroke-[2.5]" />
                           <span>✓ Sent</span>
@@ -888,7 +963,11 @@ export const OrdersSection: React.FC = () => {
                           type="button"
                           onClick={() => handleSendWhatsAppFeedback(selectedOrder)}
                           disabled={sendingFeedbackOrderId === selectedOrder.id}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-bold text-[10px] shadow-xs flex items-center gap-1.5 transition"
+                          className={`px-3 py-1.5 rounded-lg font-bold text-[10px] shadow-xs flex items-center gap-1.5 transition ${
+                            selectedOrder.feedbackRequest?.status === 'FAILED'
+                              ? 'bg-rose-600 hover:bg-rose-500 text-white'
+                              : 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white'
+                          }`}
                         >
                           {sendingFeedbackOrderId === selectedOrder.id ? (
                             <>
@@ -898,7 +977,7 @@ export const OrdersSection: React.FC = () => {
                           ) : (
                             <>
                               <WhatsAppIcon className="w-3 h-3 text-white" />
-                              <span>Send Now</span>
+                              <span>{selectedOrder.feedbackRequest?.status === 'FAILED' ? 'Retry Send' : 'Send Now'}</span>
                             </>
                           )}
                         </button>
