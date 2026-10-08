@@ -4,7 +4,6 @@ import {
   MapPin,
   ShieldCheck,
   Store,
-  LogIn,
   ExternalLink,
 } from 'lucide-react';
 import { BUSINESS_INFO } from '../../config/businessInfo';
@@ -119,31 +118,6 @@ export const MarketplaceFooter: React.FC<MarketplaceFooterProps> = ({
                 >
                   <Store className="w-3.5 h-3.5" />
                   <span>Partner with Starters4U</span>
-                </a>
-              </li>
-              <li>
-                <a
-                  href="/restaurant-admin"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    onNavigate('/restaurant-admin');
-                  }}
-                  className="hover:text-white transition-colors flex items-center gap-1"
-                >
-                  <LogIn className="w-3.5 h-3.5 text-stone-500" />
-                  <span>Restaurant Admin Portal</span>
-                </a>
-              </li>
-              <li>
-                <a
-                  href="/platform-admin"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    onNavigate('/platform-admin');
-                  }}
-                  className="hover:text-white transition-colors text-stone-500 hover:text-stone-400"
-                >
-                  Platform Management
                 </a>
               </li>
             </ul>

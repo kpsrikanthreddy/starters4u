@@ -166,13 +166,13 @@ export const PlatformAdminApp: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<PlatformTab>('dashboard');
   const [stats, setStats] = useState({
-    totalRestaurants: 1,
+    totalRestaurants: 0,
     totalOrders: 0,
     totalGMV: 0,
-    totalUsers: 2,
-    totalBranches: 1,
+    totalUsers: 0,
+    totalBranches: 0,
     platformStatus: 'healthy',
-    databaseEngine: 'PostgreSQL (Cloud / Supabase)',
+    databaseEngine: 'PostgreSQL',
   });
 
   const [restaurants, setRestaurants] = useState<RestaurantSummary[]>([]);

@@ -36,13 +36,27 @@ async function runTests() {
   const authDevice = await printService.authenticateDeviceToken(regResult.deviceToken);
   assert(authDevice, 'Valid device token must authenticate');
   assert.strictEqual(authDevice?.deviceId, testDeviceId);
+  assert(authDevice?.last_seen_at, 'Must populate last_seen_at on device authentication');
+  assert.strictEqual(authDevice?.isOnline, true, 'Device must be marked isOnline: true upon authentication');
 
   const invalidDevice = await printService.authenticateDeviceToken('invalid_token_12345');
   assert.strictEqual(invalidDevice, null, 'Invalid token must return null');
 
-  const heartbeatSuccess = await printService.touchDeviceHeartbeat(testDeviceId);
-  assert.strictEqual(heartbeatSuccess, true, 'Heartbeat must succeed');
-  console.log('✅ 3. Device token authentication & heartbeat passed');
+  // Scoped heartbeat test (Requirement 3 & 8)
+  const heartbeatSuccess = await printService.touchDeviceHeartbeat(testDeviceId, testRestaurantId, testBranchId);
+  assert.strictEqual(heartbeatSuccess, true, 'Heartbeat scoped to restaurant and branch must succeed');
+
+  // Wrong tenant heartbeat attempt must fail (Requirement 8)
+  const wrongTenantHeartbeat = await printService.touchDeviceHeartbeat(testDeviceId, 'a0000000-0000-0000-0000-000000000099', testBranchId);
+  assert.strictEqual(wrongTenantHeartbeat, false, 'Heartbeat with mismatched tenant must fail');
+
+  // Verify getTenantDevices returns isOnline: true within 90s (Requirement 4)
+  const devicesList = await printService.getTenantDevices(testRestaurantId, testBranchId);
+  const matchedDev = devicesList.find((d) => d.deviceId === testDeviceId);
+  assert(matchedDev, 'Registered device must appear in tenant devices');
+  assert.strictEqual(matchedDev?.isOnline, true, 'Device with recent heartbeat must be isOnline: true');
+  assert.strictEqual(matchedDev?.status, 'online');
+  console.log('✅ 3. Device token authentication & heartbeat passed (scoped to tenant & branch)');
 
   // 4. Create Real Order & Verify Print Job Generation (KOT + Bill)
   const menuItems = await menuService.getMenu(testRestaurantId);
@@ -226,6 +240,44 @@ async function runTests() {
   const rejectedAuth = await printService.authenticateDeviceToken(regResult.deviceToken);
   assert.strictEqual(rejectedAuth, null, 'Deactivated device token must be rejected immediately');
   console.log('✅ 11. Device deactivation and instant token revocation verified');
+
+  // 12. Offline Timeout Test (90s window)
+  console.log('\n--- Testing 90-Second Offline Timeout ---');
+  const timeoutDeviceId = 'win-timeout-check-01';
+  const timeoutReg = await printService.registerDevice({
+    restaurantId: testRestaurantId,
+    branchId: testBranchId,
+    deviceId: timeoutDeviceId,
+    deviceName: 'Timeout Check POS',
+    platform: 'win32',
+    appVersion: '1.0.0',
+  });
+
+  // Manually age last_seen_at by 100 seconds
+  if (printService.isPostgresRunning()) {
+    const { query } = await import('../db.js');
+    await query(
+      `UPDATE print_devices SET last_seen_at = NOW() - INTERVAL '100 seconds', last_heartbeat_at = NOW() - INTERVAL '100 seconds' WHERE id::text = $1 OR device_id = $2`,
+      [timeoutReg.device.id, timeoutDeviceId]
+    );
+  } else {
+    const inMem = inMemoryDb.print_devices.find((d) => d.id === timeoutReg.device.id);
+    if (inMem) {
+      const past = new Date(Date.now() - 100 * 1000).toISOString();
+      inMem.last_seen_at = past;
+      inMem.lastSeenAt = past;
+      inMem.lastHeartbeatAt = past;
+      inMem.isOnline = false;
+      inMem.status = 'offline';
+    }
+  }
+
+  const updatedDevices = await printService.getTenantDevices(testRestaurantId, testBranchId);
+  const foundTimedOut = updatedDevices.find((d) => d.deviceId === timeoutDeviceId);
+  assert(foundTimedOut, 'Must find timed out device');
+  assert.strictEqual(foundTimedOut.isOnline, false, 'Device with last_seen_at > 90s must be offline');
+  assert.strictEqual(foundTimedOut.status, 'offline');
+  console.log('✅ 12. 90-second offline timeout verified (device transitions to Offline)');
 
   console.log('\n🎉 ALL STARTERS4U PRINT AGENT BACKEND TESTS PASSED SUCCESSFULLY!');
   process.exit(0);

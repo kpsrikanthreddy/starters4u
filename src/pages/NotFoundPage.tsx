@@ -27,7 +27,7 @@ export const NotFoundPage: React.FC = () => {
             <span>Return to Homepage</span>
           </a>
           <a
-            href="/menu"
+            href="/r/mozz/menu"
             className="px-5 py-2.5 rounded-xl bg-white hover:bg-stone-100 text-stone-800 border border-stone-300 text-xs sm:text-sm font-semibold transition flex items-center gap-2"
           >
             <ShoppingBag className="w-4 h-4" />

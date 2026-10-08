@@ -129,7 +129,7 @@ export const CategoryPage: React.FC<CategoryPageProps> = ({ routeConfig }) => {
           { title: 'All Chinese Starters', path: '/chinese-starters-gachibowli' },
           { title: 'Vegetarian Pocket Pizzas', path: '/pizza-gachibowli' },
           { title: 'Veg & Paneer Momos', path: '/momos-gachibowli' },
-          { title: 'Full Menu', path: '/menu' },
+          { title: 'Full Menu', path: '/r/mozz/menu' },
         ],
       };
       break;
@@ -160,7 +160,7 @@ export const CategoryPage: React.FC<CategoryPageProps> = ({ routeConfig }) => {
           { title: 'All Chinese Starters', path: '/chinese-starters-gachibowli' },
           { title: 'Chicken Pocket Pizzas', path: '/pizza-gachibowli' },
           { title: 'Chicken Momos', path: '/momos-gachibowli' },
-          { title: 'Full Menu', path: '/menu' },
+          { title: 'Full Menu', path: '/r/mozz/menu' },
         ],
       };
       break;
@@ -191,7 +191,7 @@ export const CategoryPage: React.FC<CategoryPageProps> = ({ routeConfig }) => {
           { title: 'Korean Pocket Pizza Hyderabad Guide', path: '/korean-pocket-pizza-hyderabad' },
           { title: 'Chinese Starters in Gachibowli', path: '/chinese-starters-gachibowli' },
           { title: 'Delivery Information', path: '/delivery-information' },
-          { title: 'Full Menu', path: '/menu' },
+          { title: 'Full Menu', path: '/r/mozz/menu' },
         ],
       };
       break;
@@ -223,7 +223,7 @@ export const CategoryPage: React.FC<CategoryPageProps> = ({ routeConfig }) => {
           { title: 'Pizza in Gachibowli', path: '/pizza-gachibowli' },
           { title: 'Chinese Restaurant Overview', path: '/chinese-restaurant-gachibowli' },
           { title: 'Momos in Gachibowli', path: '/momos-gachibowli' },
-          { title: 'Full Menu', path: '/menu' },
+          { title: 'Full Menu', path: '/r/mozz/menu' },
         ],
       };
       break;
@@ -253,7 +253,7 @@ export const CategoryPage: React.FC<CategoryPageProps> = ({ routeConfig }) => {
           { title: 'Chinese Starters in Gachibowli', path: '/chinese-starters-gachibowli' },
           { title: 'Korean Pocket Pizzas', path: '/pizza-gachibowli' },
           { title: 'Chinese Restaurant Overview', path: '/chinese-restaurant-gachibowli' },
-          { title: 'Full Menu', path: '/menu' },
+          { title: 'Full Menu', path: '/r/mozz/menu' },
         ],
       };
       break;

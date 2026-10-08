@@ -1,20 +1,19 @@
 /**
- * Starters4U Delivery Pricing Engine (Phase 6)
+ * Starters4U Delivery Pricing Engine
  *
- * Implements server-authoritative and client-display delivery markup bands.
  * All monetary math is integer-safe using paise (1 Rupee = 100 paise)
  * to eliminate floating-point rounding errors.
  *
- * Pricing Formula:
- * ₹0.01 – ₹99.99   (+₹10 markup)
- * ₹100  – ₹199.99  (+₹20 markup)
- * ₹200  – ₹299.99  (+₹30 markup)
- * ₹300  – ₹399.99  (+₹40 markup)
- * ₹400  – ₹499.99  (+₹50 markup)
- * ₹500  – ₹599.99  (+₹60 markup)
- * ... continuing in steps of ₹10 per ₹100 band.
+ * NOTE: The old platform markup slab calculation (e.g. ₹99 -> +₹10 markup, ₹137 -> +₹20 markup)
+ * has been permanently removed/disabled for all new orders.
  *
- * Conceptually: platform_markup = (floor(base_price / 100) + 1) * 10
+ * For ALL NEW orders:
+ *   base_unit_price_paise = actual menu_items.price converted to paise
+ *   platform_markup_unit_paise = 0
+ *   customer_unit_price_paise = base_unit_price_paise
+ *   unit_price = actual menu_items.price
+ *
+ * Historical order items remain unmodified for audit and financial reconciliation.
  */
 
 export const DEFAULT_PRICE_BAND_SIZE_RUPEES = 100;
@@ -80,33 +79,31 @@ export function toRupees(paise: number): number {
 
 /**
  * Calculate the delivery markup in rupees for a given base price in rupees.
+ * NOTE: Platform markup is disabled for all new orders (platform_markup_unit_paise = 0).
  */
 export function calculateDeliveryMarkupRupees(
   basePriceRupees: number,
   bandSizeRupees: number = DEFAULT_PRICE_BAND_SIZE_RUPEES,
   markupStepRupees: number = DEFAULT_MARKUP_STEP_RUPEES
 ): number {
-  if (basePriceRupees <= 0) return 0;
-  const bandIndex = Math.floor(basePriceRupees / bandSizeRupees);
-  return (bandIndex + 1) * markupStepRupees;
+  return 0;
 }
 
 /**
  * Calculate the delivery markup in paise for a given base price in paise.
- * Integer-safe band calculation.
+ * NOTE: Platform markup is disabled for all new orders (platform_markup_unit_paise = 0).
  */
 export function calculateDeliveryMarkupPaise(
   basePricePaise: number,
   bandSizePaise: number = DEFAULT_PRICE_BAND_SIZE_PAISE,
   markupStepPaise: number = DEFAULT_MARKUP_STEP_PAISE
 ): number {
-  if (basePricePaise <= 0) return 0;
-  const bandIndex = Math.floor(basePricePaise / bandSizePaise);
-  return (bandIndex + 1) * markupStepPaise;
+  return 0;
 }
 
 /**
  * Calculate the customer delivery price in paise.
+ * With platform markup set to 0, customer delivery price equals base price.
  */
 export function calculateDeliverySellingPricePaise(
   basePricePaise: number,
@@ -114,11 +111,12 @@ export function calculateDeliverySellingPricePaise(
   markupStepPaise: number = DEFAULT_MARKUP_STEP_PAISE
 ): number {
   if (basePricePaise <= 0) return 0;
-  return basePricePaise + calculateDeliveryMarkupPaise(basePricePaise, bandSizePaise, markupStepPaise);
+  return basePricePaise;
 }
 
 /**
  * Calculate delivery pricing for a single item (in Rupees).
+ * Platform markup is 0 for all new orders.
  */
 export function getDeliveryPricing(
   basePriceRupees: number,
@@ -129,26 +127,21 @@ export function getDeliveryPricing(
   sellingPrice: number;
 } {
   const basePaise = toPaise(basePriceRupees);
-  if (orderType !== 'delivery' || basePaise <= 0) {
-    return {
-      basePrice: toRupees(basePaise),
-      markup: 0,
-      sellingPrice: toRupees(basePaise),
-    };
-  }
-
-  const markupPaise = calculateDeliveryMarkupPaise(basePaise);
-  const sellingPaise = basePaise + markupPaise;
-
+  const price = toRupees(basePaise);
   return {
-    basePrice: toRupees(basePaise),
-    markup: toRupees(markupPaise),
-    sellingPrice: toRupees(sellingPaise),
+    basePrice: price,
+    markup: 0,
+    sellingPrice: price,
   };
 }
 
 /**
  * Calculate complete, immutable price snapshots for an order line item.
+ * For all new orders:
+ * base_unit_price_paise = actual menu_items.price converted to paise
+ * platform_markup_unit_paise = 0
+ * customer_unit_price_paise = base_unit_price_paise
+ * unit_price = actual menu_items.price
  */
 export function calculateItemLinePricing(
   baseUnitPriceRupees: number,
@@ -158,30 +151,30 @@ export function calculateItemLinePricing(
   const qty = Math.max(1, Math.floor(quantity || 1));
   const baseUnitPricePaise = toPaise(baseUnitPriceRupees);
 
-  let platformMarkupUnitPaise = 0;
-  if (orderType === 'delivery') {
-    platformMarkupUnitPaise = calculateDeliveryMarkupPaise(baseUnitPricePaise);
-  }
-
-  const customerUnitPricePaise = baseUnitPricePaise + platformMarkupUnitPaise;
+  // Platform markup is disabled (0 paise) for all orders.
+  const platformMarkupUnitPaise = 0;
+  const customerUnitPricePaise = baseUnitPricePaise;
 
   const baseLineTotalPaise = baseUnitPricePaise * qty;
-  const platformMarkupLineTotalPaise = platformMarkupUnitPaise * qty;
-  const customerLineTotalPaise = customerUnitPricePaise * qty;
+  const platformMarkupLineTotalPaise = 0;
+  const customerLineTotalPaise = baseLineTotalPaise;
+
+  const baseUnitPrice = toRupees(baseUnitPricePaise);
+  const baseLineTotal = toRupees(baseLineTotalPaise);
 
   return {
     baseUnitPricePaise,
-    platformMarkupUnitPaise,
+    platformMarkupUnitPaise: 0,
     customerUnitPricePaise,
     baseLineTotalPaise,
-    platformMarkupLineTotalPaise,
+    platformMarkupLineTotalPaise: 0,
     customerLineTotalPaise,
-    baseUnitPrice: toRupees(baseUnitPricePaise),
-    platformMarkupUnit: toRupees(platformMarkupUnitPaise),
-    customerUnitPrice: toRupees(customerUnitPricePaise),
-    baseLineTotal: toRupees(baseLineTotalPaise),
-    platformMarkupLineTotal: toRupees(platformMarkupLineTotalPaise),
-    customerLineTotal: toRupees(customerLineTotalPaise),
+    baseUnitPrice,
+    platformMarkupUnit: 0,
+    customerUnitPrice: baseUnitPrice,
+    baseLineTotal,
+    platformMarkupLineTotal: 0,
+    customerLineTotal: baseLineTotal,
     quantity: qty,
   };
 }

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useStore } from '../context/StoreContext';
 import { useRestaurant } from '../context/RestaurantContext';
 import { MenuItem, DietaryType, CartItem } from '../types';
+import { buildCustomerNavigationUrl } from '../utils/customerNavigation';
 import {
   Search,
   X,
@@ -38,8 +39,8 @@ export const SearchModal: React.FC<SearchModalProps> = ({
   onNavigateToMenu,
   initialQuery = '',
 }) => {
-  const { menu, cart, itemCount, setIsCartOpen, addToCart, openCustomizer } = useStore();
-  const { isFlagship, getTenantUrl } = useRestaurant();
+  const { menu, cart, itemCount, setIsCartOpen, addToCart, openCustomizer, qrSession } = useStore();
+  const { isFlagship, restaurantSlug, getTenantUrl } = useRestaurant();
   const [query, setQuery] = useState(initialQuery);
   const [dietaryFilter, setDietaryFilter] = useState<DietaryType | 'all'>('all');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -120,12 +121,15 @@ export const SearchModal: React.FC<SearchModalProps> = ({
   };
 
   const handleGoToFullMenu = () => {
+    const trimmed = query.trim();
     if (onNavigateToMenu) {
-      onNavigateToMenu(query.trim());
+      onNavigateToMenu(trimmed);
     } else {
-      const target = query.trim()
-        ? getTenantUrl(`/menu?q=${encodeURIComponent(query.trim())}`)
-        : getTenantUrl('/menu');
+      const slug = (restaurantSlug || 'mozz').toLowerCase();
+      const menuPath = trimmed
+        ? `/r/${slug}/menu?q=${encodeURIComponent(trimmed)}`
+        : `/r/${slug}/menu`;
+      const target = buildCustomerNavigationUrl(menuPath, qrSession, slug);
       window.location.href = target;
     }
     onClose();

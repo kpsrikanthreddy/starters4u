@@ -191,6 +191,12 @@ async function verifySeoBuild() {
     next();
   });
 
+  // 1b. Permanent 301 Redirect from legacy /menu to canonical /r/mozz/menu
+  testApp.get(['/menu', '/menu/'], (req, res) => {
+    const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    return res.redirect(301, `/r/mozz/menu${query}`);
+  });
+
   // 2. Dynamic sitemap
   testApp.get('/sitemap.xml', async (_req, res) => {
     const xml = await generateDynamicSitemapXml();
@@ -329,14 +335,17 @@ async function verifySeoBuild() {
     const resRestaurants = await testHttp('/restaurants');
     assert(resRestaurants.statusCode === 200, 'GET /restaurants returns HTTP 200 directly');
 
-    // 2. GET /menu -> 200 OK
+    // 2. GET /menu -> 301 Redirect to /r/mozz/menu
     const resMenu = await testHttp('/menu');
-    assert(resMenu.statusCode === 200, 'GET /menu returns HTTP 200 directly');
+    assert(
+      resMenu.statusCode === 301 && resMenu.location === '/r/mozz/menu',
+      `GET /menu returns HTTP 301 -> ${resMenu.location}`
+    );
 
-    // 3. GET /menu/ -> 301 Redirect to /menu
+    // 3. GET /menu/ -> 301 Redirect to /r/mozz/menu
     const resMenuSlash = await testHttp('/menu/');
     assert(
-      resMenuSlash.statusCode === 301 && resMenuSlash.location === '/menu',
+      resMenuSlash.statusCode === 301 && (resMenuSlash.location === '/r/mozz/menu' || resMenuSlash.location === '/menu'),
       `GET /menu/ returns HTTP 301 -> ${resMenuSlash.location}`
     );
 

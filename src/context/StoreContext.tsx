@@ -3,6 +3,11 @@ import { MenuItem, CartItem, Order, OrderStatus, OrderType, CustomerDetails, Pay
 import { INITIAL_MENU, PROMO_COUPONS } from '../data/menuData';
 import { soundService } from '../utils/audio';
 import { resolveEntrySourceFromLocation } from '../utils/qrSecurity';
+import {
+  saveVerifiedQrSession,
+  getStoredQrSession,
+  clearStoredQrSession,
+} from '../utils/customerNavigation';
 import { useRestaurant, DEFAULT_FLAGSHIP_ID } from './RestaurantContext';
 
 export interface CrossRestaurantConflict {
@@ -26,6 +31,9 @@ interface StoreContextType {
   tableNumber: string;
   qrSession: QRSessionInfo;
   isModeLocked: boolean;
+  tableSessionExpired: boolean;
+  tableSessionMessage: string | null;
+  isQrValidating: boolean;
   isAdminAuthenticated: boolean;
   soundEnabled: boolean;
   customerDetails: CustomerDetails;
@@ -37,6 +45,7 @@ interface StoreContextType {
   // Actions
   setOrderType: (type: OrderType) => void;
   setTableNumber: (num: string) => void;
+  clearTableSessionExpired: () => void;
   setCustomerDetails: (details: Partial<CustomerDetails>) => void;
   setIsCustomerModalOpen: (open: boolean) => void;
   promptCustomerVerification: (onSuccessAction?: () => void) => boolean;
@@ -107,7 +116,6 @@ const StoreContext = createContext<StoreContextType | undefined>(undefined);
 
 export const LOCAL_STORAGE_KEY_CART = 'mozz_cart_v1';
 export const LOCAL_STORAGE_KEY_ACTIVE_ORDER = 'mozz_active_order_id_v1';
-export const LOCAL_STORAGE_KEY_ADMIN = 'mozz_admin_auth_v1';
 export const LOCAL_STORAGE_KEY_CUSTOMER = 'mozz_customer_details_v1';
 
 export const INITIAL_CUSTOMER: CustomerDetails = {
@@ -137,12 +145,34 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const {
     restaurant,
     restaurantId,
+    restaurantSlug,
     selectedBranchId,
     restaurantName,
     deliveryFee: restaurantDeliveryFee,
     minOrderFreeDelivery,
     isSuspended,
   } = useRestaurant();
+
+  const [tableSessionExpired, setTableSessionExpired] = useState<boolean>(false);
+  const [tableSessionMessage, setTableSessionMessage] = useState<string | null>(null);
+  const [isQrValidating, setIsQrValidating] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const sp = new URLSearchParams(window.location.search);
+      const token = sp.get('token') || sp.get('t');
+      if (token) return true;
+      const path = window.location.pathname.toLowerCase();
+      const match = path.match(/^\/r\/([a-zA-Z0-9_-]+)/);
+      const slug = (match ? match[1] : 'mozz').toLowerCase();
+      const stored = getStoredQrSession(slug);
+      if (stored && stored.token) return true;
+    }
+    return false;
+  });
+
+  const clearTableSessionExpired = useCallback(() => {
+    setTableSessionExpired(false);
+    setTableSessionMessage(null);
+  }, []);
 
   // Multi-tenant Cart Isolation
   const [cartRestaurantId, setCartRestaurantId] = useState<string | null>(restaurantId || DEFAULT_FLAGSHIP_ID);
@@ -245,9 +275,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     } catch {}
 
+    // Security hardening: Purge legacy insecure client-side admin flags
     try {
-      const savedAdmin = localStorage.getItem(LOCAL_STORAGE_KEY_ADMIN);
-      if (savedAdmin === 'true') setIsAdminAuthenticated(true);
+      localStorage.removeItem('mozz_admin_auth_v1');
     } catch {}
   }, []);
 
@@ -331,83 +361,166 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [restaurantId, selectedBranchId]);
 
-  // 2. Fetch Orders from /api/orders
-  const refreshOrders = useCallback(async () => {
-    try {
-      setIsLoadingOrders(true);
-      const res = await fetch('/api/orders');
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setOrders(data);
-        }
-      }
-    } catch (err) {
-      console.warn('[StoreContext] Could not fetch orders from backend:', err);
-    } finally {
-      setIsLoadingOrders(false);
-    }
-  }, []);
-
-  // Initial & Dependency Load
+  // Initial & Dependency Load: Load storefront menu
   useEffect(() => {
     refreshMenu();
   }, [refreshMenu]);
 
+  // Fix 2: Auto-validate with backend on load / refresh / popstate
+  // Checks token from current URL, then scoped sessionStorage backup.
+  // ALWAYS calls backend /api/qr/validate before restoring table or counter session!
   useEffect(() => {
-    refreshOrders();
-  }, [refreshOrders]);
+    if (typeof window === 'undefined') return;
 
-  // Auto-validate with backend on load if token present, or sync table parameters
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const syncFromUrl = () => {
-        const searchParams = new URLSearchParams(window.location.search);
-        const token = searchParams.get('token') || searchParams.get('t');
-        if (token) {
-          fetch(`/api/qr/validate?token=${encodeURIComponent(token)}`)
-            .then((res) => res.json())
-            .then((data) => {
-              if (data.valid) {
-                setQrSession({
-                  source: data.source,
-                  orderMode: data.orderMode,
-                  tableNumber: data.tableNumber,
-                  token,
-                  isVerified: true,
-                  isModeLocked: Boolean(data.isModeLocked),
-                  verificationMessage: data.message,
-                });
-                setOrderTypeState(data.orderMode);
-                if (data.tableNumber) {
-                  setTableNumberState(data.tableNumber);
-                }
-              }
-            })
-            .catch((err) => {
-              console.warn('Server QR validation check:', err);
-            });
-        } else {
-          // Normal website browsing: default to standard delivery and prevent unverified Dine-In
-          setQrSession((prev) => {
-            if (prev.source === 'table_qr' && prev.isVerified) return prev;
-            return {
+    let isMounted = true;
+
+    const syncFromUrlAndStorage = async () => {
+      const pathname = window.location.pathname.toLowerCase();
+      const searchParams = new URLSearchParams(window.location.search);
+      const tokenFromUrl = searchParams.get('token') || searchParams.get('t');
+
+      const pathSlugMatch = pathname.match(/^\/r\/([a-zA-Z0-9_-]+)/);
+      const currentSlug = (pathSlugMatch ? pathSlugMatch[1] : restaurantSlug || 'mozz').toLowerCase();
+
+      const isTableRoute = pathname.includes('/table/') || searchParams.has('table') || searchParams.has('tableNumber');
+
+      // 1. Identify candidate token
+      let candidateToken = tokenFromUrl;
+
+      if (!candidateToken) {
+        const stored = getStoredQrSession(currentSlug);
+        if (stored && stored.token) {
+          candidateToken = stored.token;
+        }
+      }
+
+      // 2. If a candidate token exists, ALWAYS validate with backend before restoring!
+      if (candidateToken) {
+        setIsQrValidating(true);
+        try {
+          const res = await fetch(`/api/qr/validate?token=${encodeURIComponent(candidateToken)}&slug=${encodeURIComponent(currentSlug)}`);
+          const data = await res.json();
+
+          if (!isMounted) return;
+
+          if (res.ok && data.valid) {
+            // Cross-tenant check: ensure token belongs to current restaurant
+            if (data.restaurantSlug && data.restaurantSlug.toLowerCase() !== currentSlug) {
+              console.warn('[StoreContext] Cross-restaurant QR token mismatch:', data.restaurantSlug, 'current:', currentSlug);
+              clearStoredQrSession(currentSlug);
+              setTableSessionExpired(isTableRoute);
+              setTableSessionMessage('Your table session is no longer active. Please scan the QR code on your table again.');
+              setQrSession({
+                source: 'online_web',
+                orderMode: 'delivery',
+                isVerified: false,
+                isModeLocked: false,
+                isTableLocked: false,
+                verificationMessage: 'Cross-restaurant QR session rejected. Defaulted to standard Delivery.',
+              });
+              setOrderTypeState('delivery');
+              return;
+            }
+
+            const isTable = data.source === 'table_qr' || data.orderMode === 'dine_in';
+
+            const verifiedSession: QRSessionInfo = {
+              source: data.source,
+              orderMode: data.orderMode,
+              tableNumber: data.tableNumber,
+              tableId: data.tableId,
+              restaurantId: data.restaurantId,
+              restaurantSlug: currentSlug,
+              branchId: data.branchId,
+              token: candidateToken,
+              isVerified: true,
+              isModeLocked: true,
+              isTableLocked: isTable,
+              verificationMessage: data.message || (isTable ? `Verified Table QR (${data.tableNumber})` : 'Verified Counter QR'),
+            };
+
+            setQrSession(verifiedSession);
+            setOrderTypeState(data.orderMode);
+            if (data.tableNumber) {
+              setTableNumberState(data.tableNumber);
+            }
+            setTableSessionExpired(false);
+            setTableSessionMessage(null);
+
+            // Save to sessionStorage backup scoped by restaurant
+            saveVerifiedQrSession(currentSlug, verifiedSession);
+
+            // Requirement 1: Keep the signed token in the URL after refresh
+            if (!tokenFromUrl && typeof window !== 'undefined') {
+              const currentUrl = new URL(window.location.href);
+              currentUrl.searchParams.set('token', candidateToken);
+              window.history.replaceState({}, '', currentUrl.pathname + currentUrl.search);
+            }
+            return;
+          } else {
+            // Token validation failed: invalid, expired, tampered, or table inactive
+            clearStoredQrSession(currentSlug);
+            const wasTableAttempt = isTableRoute || (candidateToken && candidateToken.includes('.'));
+            if (wasTableAttempt) {
+              setTableSessionExpired(true);
+              setTableSessionMessage('Your table session is no longer active. Please scan the QR code on your table again.');
+            }
+            setQrSession({
               source: 'online_web',
               orderMode: 'delivery',
               isVerified: false,
               isModeLocked: false,
-              verificationMessage: 'Online Customer Web Session',
-            };
-          });
-          setOrderTypeState((prev) => (prev === 'dine_in' ? 'delivery' : prev));
+              isTableLocked: false,
+              verificationMessage: 'Your table session is no longer active. Please scan the QR code on your table again.',
+            });
+            setOrderTypeState('delivery');
+          }
+        } catch (err) {
+          console.warn('[StoreContext] Server QR validation check error:', err);
+        } finally {
+          if (isMounted) setIsQrValidating(false);
         }
-      };
+        return;
+      }
 
-      syncFromUrl();
-      window.addEventListener('popstate', syncFromUrl);
-      return () => window.removeEventListener('popstate', syncFromUrl);
-    }
-  }, []);
+      // 3. No candidate token in URL and no candidate token in sessionStorage:
+      if (isTableRoute) {
+        // Unsigned manual table access is rejected
+        setTableSessionExpired(true);
+        setTableSessionMessage('Your table session is no longer active. Please scan the QR code on your table again.');
+        setQrSession({
+          source: 'online_web',
+          orderMode: 'delivery',
+          isVerified: false,
+          isModeLocked: false,
+          isTableLocked: false,
+          verificationMessage: 'Unsigned table URL. Dine-In requires a verified Table QR scan.',
+        });
+        setOrderTypeState('delivery');
+        return;
+      }
+
+      // Normal website browsing: default to standard delivery and prevent unverified Dine-In
+      setTableSessionExpired(false);
+      setTableSessionMessage(null);
+      setQrSession({
+        source: 'online_web',
+        orderMode: 'delivery',
+        isVerified: false,
+        isModeLocked: false,
+        isTableLocked: false,
+        verificationMessage: 'Online Customer Web Session',
+      });
+      setOrderTypeState((prev) => (prev === 'dine_in' ? 'delivery' : prev));
+    };
+
+    syncFromUrlAndStorage();
+    window.addEventListener('popstate', syncFromUrlAndStorage);
+    return () => {
+      isMounted = false;
+      window.removeEventListener('popstate', syncFromUrlAndStorage);
+    };
+  }, [restaurantSlug]);
 
   const setOrderType = (type: OrderType) => {
     if (isModeLocked) {
@@ -455,11 +568,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const clearQRSession = () => {
+    const slug = (restaurantSlug || 'mozz').toLowerCase();
+    clearStoredQrSession(slug);
+    setTableSessionExpired(false);
+    setTableSessionMessage(null);
     const defaultWeb: QRSessionInfo = {
       source: 'online_web',
       orderMode: 'delivery',
-      isVerified: true,
+      isVerified: false,
       isModeLocked: false,
+      isTableLocked: false,
       verificationMessage: 'Direct Online Customer (Home Delivery)',
     };
     setQrSession(defaultWeb);
@@ -478,12 +596,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     } catch {}
   }, [activeOrderId]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(LOCAL_STORAGE_KEY_ADMIN, isAdminAuthenticated ? 'true' : 'false');
-    } catch {}
-  }, [isAdminAuthenticated]);
 
   useEffect(() => {
     try {
@@ -867,6 +979,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return null;
   }, [activeOrderId, clearCompletedCustomerSession]);
 
+  const refreshOrders = useCallback(async () => {
+    if (activeOrderId) {
+      await fetchOrderById(activeOrderId);
+    }
+  }, [activeOrderId, fetchOrderById]);
+
   const updateOrderDeliveryLocation = useCallback(
     async (
       orderId: string,
@@ -1131,6 +1249,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         tableNumber,
         qrSession,
         isModeLocked,
+        tableSessionExpired,
+        tableSessionMessage,
+        isQrValidating,
+        clearTableSessionExpired,
         isAdminAuthenticated,
         soundEnabled,
         customerDetails,

@@ -45,6 +45,14 @@ function proceedWithTenant(req: Request, res: Response, next: NextFunction) {
     });
   }
 
+  const userRole = (req.user.role || '').toUpperCase();
+  if (userRole === 'CUSTOMER' || userRole === 'VISITOR' || userRole === 'USER') {
+    return res.status(403).json({
+      error: 'Forbidden',
+      message: 'Access denied: Customer accounts cannot access administrative tenant resources.',
+    });
+  }
+
   // 2. Build immutable server-side tenant context from user session
   const tenant = buildTenantContext(req.user);
   req.tenant = tenant;
@@ -54,11 +62,23 @@ function proceedWithTenant(req: Request, res: Response, next: NextFunction) {
   const requestedRestaurantId =
     req.params.restaurantId ||
     (req.query.restaurant_id as string) ||
-    (req.body && req.body.restaurant_id);
+    (req.query.restaurantId as string) ||
+    (req.body && (req.body.restaurant_id || req.body.restaurantId));
 
   if (requestedRestaurantId && !tenant.isPlatformAdmin) {
     const access = verifyTenantAccess(req.user, requestedRestaurantId);
     if (!access.allowed) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Access denied: You do not have permission to access resources belonging to another restaurant.',
+      });
+    }
+  }
+
+  // Also check if restaurant slug is specified in query/params and doesn't match
+  const requestedSlug = req.params.slug || (req.query.slug as string) || (req.query.restaurantSlug as string);
+  if (requestedSlug && !tenant.isPlatformAdmin && tenant.restaurantSlug) {
+    if (requestedSlug.toLowerCase() !== tenant.restaurantSlug.toLowerCase()) {
       return res.status(403).json({
         error: 'Forbidden',
         message: 'Access denied: You do not have permission to access resources belonging to another restaurant.',

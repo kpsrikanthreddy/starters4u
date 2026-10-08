@@ -142,36 +142,6 @@ export const SEO_ROUTES: SeoRouteConfig[] = [
     ],
   },
 
-  // 4. MOZZ Full Menu
-  {
-    path: '/menu',
-    canonicalUrl: `${BUSINESS_INFO.domain}/menu`,
-    title: 'Menu | MOZZ Chinese & Pizzateria – Starters4U',
-    metaDescription:
-      'Explore the complete menu of MOZZ Chinese & Pizzateria on Starters4U. Order Korean pocket pizzas, starters, fried rice, noodles and momos in Gachibowli.',
-    h1: 'MOZZ Chinese & Pizzateria Menu in Gachibowli',
-    breadcrumbs: [
-      { name: 'Home', path: '/' },
-      { name: 'Menu', path: '/menu' },
-    ],
-    targetKeywords: ['MOZZ menu Gachibowli', 'Chinese food menu Gachibowli', 'pocket pizza menu'],
-    isPublicIndexable: true,
-    changefreq: 'daily',
-    priority: 0.9,
-    faqs: [
-      {
-        question: 'Can I customize pocket pizza crusts and shapes on the menu?',
-        answer:
-          'Yes. Pocket pizzas can be ordered in Rectangular (R), Circular (C), or Square (S) shapes with add-on options like extra in-house cheese blend or signature dips.',
-      },
-      {
-        question: 'Are prices transparent and inclusive?',
-        answer:
-          'All item prices are clearly listed in Indian Rupees (INR ₹) with transparent add-on pricing before checkout.',
-      },
-    ],
-  },
-
   // 3. Chinese Restaurant in Gachibowli
   {
     path: '/chinese-restaurant-gachibowli',
@@ -620,7 +590,7 @@ export function getRouteJsonLd(route: SeoRouteConfig): Record<string, any>[] {
       name: route.title.split('|')[0].trim(),
       url: route.canonicalUrl,
     });
-  } else if (route.path.startsWith('/chinese') || route.path.startsWith('/pizza') || route.path === '/menu') {
+  } else if (route.path.startsWith('/chinese') || route.path.startsWith('/pizza') || route.path === '/r/mozz/menu') {
     // Legacy MOZZ subpages point back to canonical MOZZ restaurant
     schemas.push({
       '@context': 'https://schema.org',
@@ -642,7 +612,7 @@ export function getRouteJsonLd(route: SeoRouteConfig): Record<string, any>[] {
     isPartOf: {
       '@id': `${BUSINESS_INFO.domain}/#website`,
     },
-    about: route.path === '/r/mozz' || route.path.startsWith('/chinese') || route.path.startsWith('/pizza') || route.path === '/menu'
+    about: route.path === '/r/mozz' || route.path.startsWith('/chinese') || route.path.startsWith('/pizza') || route.path === '/r/mozz/menu'
       ? { '@id': `${BUSINESS_INFO.domain}/r/mozz#restaurant` }
       : route.path.startsWith('/r/')
       ? { '@id': `${route.canonicalUrl}#restaurant` }

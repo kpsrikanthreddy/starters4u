@@ -43,19 +43,26 @@ export async function requireDeviceAuth(req: Request, res: Response, next: NextF
     }
   }
 
-  // 2. Check for Bearer token in Authorization header
+  // 2. Extract device secret token
+  let token: string | undefined;
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({
-      error: 'Device authentication required',
-      details: 'Provide Authorization: Bearer <device_token> header.',
-    });
+  if (authHeader) {
+    if (authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7).trim();
+    } else {
+      token = authHeader.trim();
+    }
+  } else if (typeof req.headers['x-device-token'] === 'string') {
+    token = req.headers['x-device-token'].trim();
+  } else if (req.body && typeof req.body.deviceToken === 'string') {
+    token = req.body.deviceToken.trim();
+  } else if (req.body && typeof req.body.token === 'string') {
+    token = req.body.token.trim();
   }
 
-  const token = authHeader.substring(7).trim();
   if (!token) {
     return res.status(401).json({
-      error: 'Device authentication token missing',
+      error: 'Device authentication required',
       details: 'Provide Authorization: Bearer <device_token> header.',
     });
   }

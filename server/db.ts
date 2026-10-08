@@ -94,6 +94,7 @@ export interface InMemoryDbState {
   payment_attempts?: any[];
   inventory_items?: any[];
   inventory_transactions?: any[];
+  customer_feedback_requests?: any[];
 }
 
 export const inMemoryDb: InMemoryDbState = {
@@ -601,6 +602,7 @@ export const inMemoryDb: InMemoryDbState = {
   payment_webhook_events: [] as any[],
   payment_settings_audit: [] as any[],
   payment_attempts: [] as any[],
+  customer_feedback_requests: [] as any[],
   platform_pricing_config: [
     {
       id: 'default',
@@ -859,6 +861,13 @@ function executeInMemoryQuery(text: string, params: any[] = []): { rows: any[]; 
     }
     return { rows, rowCount: rows.length };
   }
+  if (lower.startsWith('select') && lower.includes('from customer_feedback_requests')) {
+    let rows = inMemoryDb.customer_feedback_requests || [];
+    if (params[0]) {
+      rows = rows.filter((r: any) => r.order_id === params[0] || r.id === params[0] || r.restaurant_id === params[0]);
+    }
+    return { rows, rowCount: rows.length };
+  }
 
   return { rows: [], rowCount: 0 };
 }
@@ -890,6 +899,9 @@ export async function initializeDatabase(): Promise<{ success: boolean; mode: st
           await client.query(schemaSql);
           console.info('[DB] PostgreSQL multi-tenant schema verified/applied (created or modified objects).');
         }
+
+        // Ensure print_devices has last_seen_at column
+        await client.query(`ALTER TABLE print_devices ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ DEFAULT NOW();`);
 
         // Apply seed script (Idempotently creates or modifies base restaurant, branch, tables, categories & menu items)
         const seedPath = path.join(process.cwd(), 'database', 'seed.sql');
@@ -961,6 +973,14 @@ export async function initializeDatabase(): Promise<{ success: boolean; mode: st
           const migSql = fs.readFileSync(paymentAttemptsMigPath, 'utf-8');
           await client.query(migSql);
           console.info('[DB] Direct UPI payment attempts migration verified/applied.');
+        }
+
+        // Apply order confirmed and feedback migration idempotently
+        const feedbackMigPath = path.join(process.cwd(), 'database', 'migrations', '009_order_confirmed_and_feedback.sql');
+        if (fs.existsSync(feedbackMigPath)) {
+          const migSql = fs.readFileSync(feedbackMigPath, 'utf-8');
+          await client.query(migSql);
+          console.info('[DB] Order confirmed timestamp & customer feedback requests migration verified/applied.');
         }
 
         // NOTE: Migration 008 (Multi-Tenant Restaurant Inventory & Stock Management)

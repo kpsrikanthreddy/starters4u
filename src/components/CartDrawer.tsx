@@ -73,6 +73,9 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
     setTableNumber,
     qrSession,
     isModeLocked,
+    tableSessionExpired,
+    tableSessionMessage,
+    clearTableSessionExpired,
     customerDetails,
     setCustomerDetails,
     promptCustomerVerification,
@@ -403,6 +406,31 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenCheckout }) => {
               </div>
             ) : (
               <>
+                {/* Table Session Expired Alert Banner */}
+                {tableSessionExpired && (
+                  <div className="bg-amber-50 border border-amber-300 rounded-2xl p-3.5 shadow-xs flex items-start justify-between gap-2.5 animate-fadeIn">
+                    <div className="flex items-start gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-800 shrink-0 mt-0.5">
+                        <AlertCircle className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-amber-900">Table Session Expired</div>
+                        <p className="text-[11px] text-amber-800 mt-0.5 leading-snug">
+                          {tableSessionMessage || 'Your table session is no longer active. Please scan the QR code on your table again.'}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={clearTableSessionExpired}
+                      className="p-1 rounded-lg hover:bg-amber-100 text-amber-700 hover:text-amber-900 transition-colors"
+                      title="Dismiss"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
                 {/* Order Type / Mode */}
                 {isModeLocked ? (
                   <div className="bg-gradient-to-r from-amber-50/90 via-rose-50/50 to-amber-50/90 border border-amber-200/90 rounded-2xl p-3.5 shadow-xs">

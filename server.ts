@@ -31,7 +31,7 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
 
-    // 1. Permanently redirect trailing slashes (except root '/') once to canonical no-trailing-slash URL: e.g. /menu/ -> /menu (HTTP 301)
+    // 1. Permanently redirect trailing slashes (except root '/') once to canonical no-trailing-slash URL: e.g. /about/ -> /about (HTTP 301)
     app.use((req, res, next) => {
       if (req.path.length > 1 && req.path.endsWith('/')) {
         const cleanPath = req.path.replace(/\/+$/, '');
@@ -40,6 +40,12 @@ async function startServer() {
         return res.redirect(301, cleanPath + queryString);
       }
       next();
+    });
+
+    // 1b. Permanent 301 Redirect from legacy /menu to canonical /r/mozz/menu (preserving query parameters)
+    app.get(['/menu', '/menu/'], (req, res) => {
+      const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+      return res.redirect(301, `/r/mozz/menu${query}`);
     });
 
     // 2. Explicit SEO route handler for pre-rendered clean HTML files (e.g. /about -> dist/about.html)
@@ -103,6 +109,7 @@ async function startServer() {
       '/admin',
       '/restaurant-admin',
       '/platform-admin',
+      '/print-agent',
       '/track',
       '/cart',
       '/checkout',

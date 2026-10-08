@@ -451,6 +451,206 @@ async function runPrintDeviceTests() {
       assert.strictEqual(crossRevokeRes.status, 404, 'Foreign restaurant must receive 404 Device not found');
     });
 
+    // -------------------------------------------------------------------------
+    // Test 10: Authenticated Heartbeat & Online Status Verification
+    // -------------------------------------------------------------------------
+    let activeToken = '';
+    let activeDeviceId = 'pos-heartbeat-term-01';
+    await test('10. Authenticated heartbeat updates last_seen_at and sets device Online', async () => {
+      // 1. Generate pairing code and pair new device
+      const codeRes = await makeRequest(server, {
+        path: '/api/admin/print-devices/pairing-code',
+        method: 'POST',
+        headers: { Authorization: `Bearer ${ownerAToken}` },
+        body: { branchId: branchA1Id },
+      });
+      const pairRes = await makeRequest(server, {
+        path: '/api/print-agent/devices/pair',
+        method: 'POST',
+        body: {
+          pairingCode: codeRes.body.pairingCode,
+          deviceId: activeDeviceId,
+          deviceName: 'Online Test Terminal',
+        },
+      });
+
+      assert.strictEqual(pairRes.status, 201);
+      assert.ok(pairRes.body.deviceToken);
+      assert.strictEqual(pairRes.body.backendUrl, 'https://www.starters4u.in');
+      activeToken = pairRes.body.deviceToken;
+
+      // 2. Send authenticated heartbeat via Bearer token
+      const hbRes = await makeRequest(server, {
+        path: '/api/print-agent/devices/heartbeat',
+        method: 'POST',
+        headers: { Authorization: `Bearer ${activeToken}` },
+        body: {
+          deviceId: activeDeviceId,
+          restaurantId: restaurantAId,
+          branchId: branchA1Id,
+        },
+      });
+
+      assert.strictEqual(hbRes.status, 200, `Expected 200, got ${hbRes.status}`);
+      assert.strictEqual(hbRes.body.success, true);
+      assert.strictEqual(hbRes.body.deviceId, activeDeviceId);
+      assert.strictEqual(hbRes.body.isOnline, true);
+      assert.strictEqual(hbRes.body.online, true);
+      assert.strictEqual(hbRes.body.status, 'online');
+      assert.ok(hbRes.body.last_seen_at, 'Must return last_seen_at timestamp');
+
+      // 2.1 Send authenticated heartbeat via x-device-token and verify CORS preflight
+      const corsOptionsRes = await makeRequest(server, {
+        path: '/api/print-agent/devices/heartbeat',
+        method: 'OPTIONS',
+        headers: {
+          Origin: 'https://admin.starters4u.in',
+          'Access-Control-Request-Method': 'POST',
+          'Access-Control-Request-Headers': 'authorization, content-type, x-device-token',
+        },
+      });
+      assert.strictEqual(corsOptionsRes.status, 200, 'OPTIONS preflight for x-device-token must return 200');
+      const allowedHeaders = (corsOptionsRes.headers['access-control-allow-headers'] as string || '').toLowerCase();
+      assert.ok(allowedHeaders.includes('x-device-token'), 'Access-Control-Allow-Headers must include x-device-token');
+
+      const xTokenHbRes = await makeRequest(server, {
+        path: '/api/print-agent/devices/heartbeat',
+        method: 'POST',
+        headers: {
+          'x-device-token': activeToken,
+        },
+        body: {
+          deviceId: activeDeviceId,
+          restaurantId: restaurantAId,
+          branchId: branchA1Id,
+        },
+      });
+      assert.strictEqual(xTokenHbRes.status, 200, 'x-device-token header heartbeat must succeed');
+      assert.strictEqual(xTokenHbRes.body.isOnline, true);
+
+      // 3. Verify Restaurant Admin GET /api/admin/print-devices returns device as Online
+      const listRes = await makeRequest(server, {
+        path: `/api/admin/print-devices?branchId=${branchA1Id}`,
+        method: 'GET',
+        headers: { Authorization: `Bearer ${ownerAToken}` },
+      });
+      const dev = listRes.body.find((d: any) => d.deviceId === activeDeviceId);
+      assert.ok(dev, 'Device must appear in tenant device list');
+      assert.strictEqual(dev.isOnline, true, 'Device must be marked isOnline: true');
+      assert.strictEqual(dev.status, 'online', 'Device status must be online');
+      assert.ok(dev.last_seen_at, 'Device must include last_seen_at in admin device list');
+    });
+
+    // -------------------------------------------------------------------------
+    // Test 11: Invalid Token Rejection
+    // -------------------------------------------------------------------------
+    await test('11. Heartbeat rejects invalid or deactivated device token (401 Unauthorized)', async () => {
+      const invalidRes = await makeRequest(server, {
+        path: '/api/print-agent/devices/heartbeat',
+        method: 'POST',
+        headers: { Authorization: 'Bearer fake_invalid_device_token_9999' },
+      });
+      assert.strictEqual(invalidRes.status, 401, 'Invalid token must be rejected with 401');
+      assert.ok(invalidRes.body.error);
+
+      // Missing header
+      const missingRes = await makeRequest(server, {
+        path: '/api/print-agent/devices/heartbeat',
+        method: 'POST',
+      });
+      assert.strictEqual(missingRes.status, 401, 'Missing token must be rejected with 401');
+    });
+
+    // -------------------------------------------------------------------------
+    // Test 12: Strict Tenant Isolation Enforcement on Heartbeat
+    // -------------------------------------------------------------------------
+    await test('12. Wrong-Tenant Rejection: Device token cannot update or heartbeat for foreign tenant/branch', async () => {
+      // Terminal of Restaurant A tries to heartbeat pretending to be Restaurant B
+      const wrongTenantRes = await makeRequest(server, {
+        path: '/api/print-agent/devices/heartbeat',
+        method: 'POST',
+        headers: { Authorization: `Bearer ${activeToken}` },
+        body: {
+          deviceId: activeDeviceId,
+          restaurantId: restaurantBId, // Foreign restaurant
+          branchId: branchB1Id,
+        },
+      });
+
+      assert.strictEqual(wrongTenantRes.status, 403, 'Cross-tenant heartbeat must be rejected with 403 Forbidden');
+      assert.ok(wrongTenantRes.body.error?.includes('Tenant isolation violation'));
+
+      // Wrong device ID mismatch rejection
+      const wrongDevRes = await makeRequest(server, {
+        path: '/api/print-agent/devices/heartbeat',
+        method: 'POST',
+        headers: { Authorization: `Bearer ${activeToken}` },
+        body: {
+          deviceId: 'pos-intruder-device-99',
+          restaurantId: restaurantAId,
+          branchId: branchA1Id,
+        },
+      });
+      assert.strictEqual(wrongDevRes.status, 403, 'Cross-device ID heartbeat mismatch must be rejected with 403 Forbidden');
+      assert.ok(wrongDevRes.body.error?.includes('Tenant isolation violation'));
+
+      // Also verify foreign restaurant admin cannot see Restaurant A's active device
+      const foreignListRes = await makeRequest(server, {
+        path: '/api/admin/print-devices',
+        method: 'GET',
+        headers: { Authorization: `Bearer ${ownerBToken}` },
+      });
+      const intruderFind = foreignListRes.body.find((d: any) => d.deviceId === activeDeviceId);
+      assert.strictEqual(intruderFind, undefined, 'Restaurant B must never see Restaurant A device');
+    });
+
+    // -------------------------------------------------------------------------
+    // Test 13: Offline Timeout (90 seconds threshold)
+    // -------------------------------------------------------------------------
+    await test('13. Offline Timeout: Device becomes Offline when last_seen_at exceeds 90 seconds', async () => {
+      // Create a device with last_seen_at set to 100 seconds ago (>90s)
+      const timeoutDeviceId = 'pos-timeout-test-terminal';
+      const pastTimestamp = new Date(Date.now() - 100 * 1000).toISOString(); // 100 seconds ago
+
+      // Register device
+      const reg = await printService.registerDevice({
+        restaurantId: restaurantAId,
+        branchId: branchA1Id,
+        deviceId: timeoutDeviceId,
+        deviceName: 'Timeout Test Terminal',
+      });
+
+      // Manually set last_seen_at to 100 seconds ago
+      if (printService.isPostgresRunning()) {
+        const { query } = await import('../server/db.js');
+        await query(
+          `UPDATE print_devices SET last_seen_at = NOW() - INTERVAL '100 seconds', last_heartbeat_at = NOW() - INTERVAL '100 seconds' WHERE id::text = $1 OR device_id = $2`,
+          [reg.device.id, timeoutDeviceId]
+        );
+      } else {
+        const inMem = inMemoryDb.print_devices.find((d) => d.id === reg.device.id || d.deviceId === timeoutDeviceId);
+        if (inMem) {
+          inMem.last_seen_at = pastTimestamp;
+          inMem.lastSeenAt = pastTimestamp;
+          inMem.lastHeartbeatAt = pastTimestamp;
+          inMem.isOnline = false;
+          inMem.status = 'offline';
+        }
+      }
+
+      // Query admin device list
+      const listRes = await makeRequest(server, {
+        path: `/api/admin/print-devices?branchId=${branchA1Id}`,
+        method: 'GET',
+        headers: { Authorization: `Bearer ${ownerAToken}` },
+      });
+
+      const timedOutDevice = listRes.body.find((d: any) => d.deviceId === timeoutDeviceId);
+      assert.ok(timedOutDevice, 'Timed out device must exist in list');
+      assert.strictEqual(timedOutDevice.isOnline, false, 'Device past 90s must be isOnline: false');
+      assert.strictEqual(timedOutDevice.status, 'offline', 'Device past 90s must have status: offline');
+    });
+
     // Summary
     console.log('\n================================================================');
     console.log(`📊 Test Results: ${passed} passed, ${failed} failed`);

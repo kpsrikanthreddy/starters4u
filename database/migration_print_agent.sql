@@ -15,11 +15,15 @@ CREATE TABLE IF NOT EXISTS print_devices (
     platform VARCHAR(50) DEFAULT 'win32',
     app_version VARCHAR(50) DEFAULT '1.0.0',
     is_active BOOLEAN DEFAULT TRUE,
+    last_seen_at TIMESTAMPTZ DEFAULT NOW(),
     last_heartbeat_at TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT unique_restaurant_branch_device UNIQUE (restaurant_id, branch_id, device_id)
 );
+
+-- Ensure last_seen_at column exists if table was already created
+ALTER TABLE print_devices ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ DEFAULT NOW();
 
 -- 2. PRINTER CONFIGURATIONS (Installed Windows printers mapped to stations)
 CREATE TABLE IF NOT EXISTS printer_configurations (

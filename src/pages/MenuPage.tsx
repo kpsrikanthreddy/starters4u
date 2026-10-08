@@ -1,16 +1,17 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { SeoRouteConfig } from '../types/seoTypes';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 import { SeoFaqSection } from '../components/SeoFaqSection';
 import { FoodCard } from '../components/FoodCard';
 import { useStore } from '../context/StoreContext';
+import { useRestaurant } from '../context/RestaurantContext';
 import { FoodCategory, DietaryType } from '../types';
 import {
   normalizeCategorySlug,
   isCategoryMatch,
   getActiveCategoryTabs,
 } from '../utils/categoryUtils';
-import { Search, SlidersHorizontal, Utensils, Check } from 'lucide-react';
+import { Search, SlidersHorizontal, Utensils, Check, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface MenuPageProps {
   routeConfig: SeoRouteConfig;
@@ -22,7 +23,9 @@ export const normalizeCategoryParam = (rawCategory: string | null | undefined): 
 };
 
 export const MenuPage: React.FC<MenuPageProps> = ({ routeConfig, currentPath }) => {
-  const { menu } = useStore();
+  const { menu, qrSession } = useStore();
+  const { restaurantSlug } = useRestaurant();
+  const effectiveSlug = (restaurantSlug || 'mozz').toLowerCase();
 
   const getInitialCategory = (): string => {
     if (typeof window === 'undefined') return 'all';
@@ -81,6 +84,48 @@ export const MenuPage: React.FC<MenuPageProps> = ({ routeConfig, currentPath }) 
     return getActiveCategoryTabs(menu, false);
   }, [menu]);
 
+  // Horizontal scroll state & ref for category tabs
+  const categoryScrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const checkScroll = useCallback(() => {
+    const el = categoryScrollRef.current;
+    if (!el) return;
+    const { scrollLeft, scrollWidth, clientWidth } = el;
+    setCanScrollLeft(scrollLeft > 4);
+    setCanScrollRight(scrollLeft + clientWidth < scrollWidth - 4);
+  }, []);
+
+  useEffect(() => {
+    checkScroll();
+    const timer = setTimeout(checkScroll, 100);
+    const el = categoryScrollRef.current;
+    if (!el) return () => clearTimeout(timer);
+
+    const handleResize = () => checkScroll();
+    window.addEventListener('resize', handleResize);
+
+    const ro = new ResizeObserver(() => checkScroll());
+    ro.observe(el);
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('resize', handleResize);
+      ro.disconnect();
+    };
+  }, [checkScroll, categoryTabs, selectedCategory]);
+
+  const handleScroll = (direction: 'left' | 'right') => {
+    const el = categoryScrollRef.current;
+    if (!el) return;
+    const scrollAmount = Math.max(el.clientWidth * 0.65, 200);
+    el.scrollBy({
+      left: direction === 'left' ? -scrollAmount : scrollAmount,
+      behavior: 'smooth',
+    });
+  };
+
   // Safe fallback if category in URL does not exist in active menu categories
   React.useEffect(() => {
     if (selectedCategory !== 'all' && categoryTabs.length > 0) {
@@ -94,17 +139,34 @@ export const MenuPage: React.FC<MenuPageProps> = ({ routeConfig, currentPath }) 
       if (!exists) {
         setSelectedCategory('all');
         if (typeof window !== 'undefined' && window.history) {
-          window.history.replaceState({ category: 'all' }, '', '/menu');
+          const currentParams = new URLSearchParams(window.location.search);
+          currentParams.delete('category');
+          if (qrSession?.isVerified && qrSession.token && qrSession.source !== 'online_web') {
+            currentParams.set('token', qrSession.token);
+          }
+          const qs = currentParams.toString();
+          const newUrl = qs ? `/r/${effectiveSlug}/menu?${qs}` : `/r/${effectiveSlug}/menu`;
+          window.history.replaceState({ category: 'all' }, '', newUrl);
         }
       }
     }
-  }, [categoryTabs, selectedCategory]);
+  }, [categoryTabs, selectedCategory, effectiveSlug, qrSession]);
 
   const handleSelectCategory = (catId: string) => {
     const normalized = normalizeCategoryParam(catId);
     setSelectedCategory(normalized);
     if (typeof window !== 'undefined' && window.history) {
-      const newUrl = normalized === 'all' ? '/menu' : `/menu?category=${encodeURIComponent(normalized)}`;
+      const currentParams = new URLSearchParams(window.location.search);
+      if (normalized === 'all') {
+        currentParams.delete('category');
+      } else {
+        currentParams.set('category', normalized);
+      }
+      if (qrSession?.isVerified && qrSession.token && qrSession.source !== 'online_web') {
+        currentParams.set('token', qrSession.token);
+      }
+      const qs = currentParams.toString();
+      const newUrl = qs ? `/r/${effectiveSlug}/menu?${qs}` : `/r/${effectiveSlug}/menu`;
       window.history.pushState({ category: normalized }, '', newUrl);
     }
   };
@@ -215,54 +277,86 @@ export const MenuPage: React.FC<MenuPageProps> = ({ routeConfig, currentPath }) 
           </div>
 
           {/* Category Tabs */}
-          <div className="mt-4 flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
-            <button
-              type="button"
-              onClick={() => handleSelectCategory('all')}
-              className={`px-4 py-2 rounded-xl text-xs font-bold shrink-0 transition flex items-center gap-2 cursor-pointer shadow-xs ${
-                selectedCategory === 'all'
-                  ? 'bg-rose-600 text-white shadow-md ring-2 ring-rose-600 font-extrabold'
-                  : 'bg-white text-stone-700 hover:text-stone-950 hover:bg-stone-100 border border-stone-200'
-              }`}
+          <div className="relative mt-4 flex items-center">
+            {canScrollLeft && (
+              <div className="absolute left-0 top-0 bottom-0 z-10 flex items-center pr-2 pl-0.5 bg-gradient-to-r from-white via-white/95 to-transparent rounded-l-xl">
+                <button
+                  type="button"
+                  onClick={() => handleScroll('left')}
+                  aria-label="Scroll left"
+                  className="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center rounded-xl bg-white text-stone-700 hover:text-stone-900 border border-stone-200 shadow-md hover:bg-stone-50 transition active:scale-95 cursor-pointer touch-manipulation"
+                >
+                  <ChevronLeft className="w-5 h-5 text-stone-700" />
+                </button>
+              </div>
+            )}
+
+            <div
+              ref={categoryScrollRef}
+              onScroll={checkScroll}
+              className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none scroll-smooth w-full"
             >
-              <span>✨</span>
-              <span>All Categories</span>
-              <span
-                className={`text-[10px] px-1.5 py-0.5 rounded-full font-black ${
-                  selectedCategory === 'all' ? 'bg-white/25 text-white' : 'bg-stone-100 text-stone-600 border border-stone-200'
+              <button
+                type="button"
+                onClick={() => handleSelectCategory('all')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold shrink-0 transition flex items-center gap-2 cursor-pointer shadow-xs ${
+                  selectedCategory === 'all'
+                    ? 'bg-rose-600 text-white shadow-md ring-2 ring-rose-600 font-extrabold'
+                    : 'bg-white text-stone-700 hover:text-stone-950 hover:bg-stone-100 border border-stone-200'
                 }`}
               >
-                {activeInStockCount}
-              </span>
-            </button>
-
-            {categoryTabs.map((cat) => {
-              const isSelected =
-                selectedCategory === cat.id ||
-                normalizeCategorySlug(selectedCategory) === normalizeCategorySlug(cat.id);
-              return (
-                <button
-                  key={cat.id}
-                  type="button"
-                  onClick={() => handleSelectCategory(cat.id)}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold shrink-0 transition flex items-center gap-2 cursor-pointer shadow-xs ${
-                    isSelected
-                      ? 'bg-rose-600 text-white shadow-md ring-2 ring-rose-600 font-extrabold'
-                      : 'bg-white text-stone-700 hover:text-stone-950 hover:bg-stone-100 border border-stone-200'
+                <span>✨</span>
+                <span>All Categories</span>
+                <span
+                  className={`text-[10px] px-1.5 py-0.5 rounded-full font-black ${
+                    selectedCategory === 'all' ? 'bg-white/25 text-white' : 'bg-stone-100 text-stone-600 border border-stone-200'
                   }`}
                 >
-                  <span className="text-sm">{cat.icon}</span>
-                  <span>{cat.name}</span>
-                  <span
-                    className={`text-[10px] px-1.5 py-0.5 rounded-full font-black ${
-                      isSelected ? 'bg-white/25 text-white' : 'bg-stone-100 text-stone-600 border border-stone-200'
+                  {activeInStockCount}
+                </span>
+              </button>
+
+              {categoryTabs.map((cat) => {
+                const isSelected =
+                  selectedCategory === cat.id ||
+                  normalizeCategorySlug(selectedCategory) === normalizeCategorySlug(cat.id);
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => handleSelectCategory(cat.id)}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold shrink-0 transition flex items-center gap-2 cursor-pointer shadow-xs ${
+                      isSelected
+                        ? 'bg-rose-600 text-white shadow-md ring-2 ring-rose-600 font-extrabold'
+                        : 'bg-white text-stone-700 hover:text-stone-950 hover:bg-stone-100 border border-stone-200'
                     }`}
                   >
-                    {cat.count}
-                  </span>
+                    <span className="text-sm">{cat.icon}</span>
+                    <span>{cat.name}</span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded-full font-black ${
+                        isSelected ? 'bg-white/25 text-white' : 'bg-stone-100 text-stone-600 border border-stone-200'
+                      }`}
+                    >
+                      {cat.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {canScrollRight && (
+              <div className="absolute right-0 top-0 bottom-0 z-10 flex items-center pl-2 pr-0.5 bg-gradient-to-l from-white via-white/95 to-transparent rounded-r-xl">
+                <button
+                  type="button"
+                  onClick={() => handleScroll('right')}
+                  aria-label="Scroll right"
+                  className="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center rounded-xl bg-white text-stone-700 hover:text-stone-900 border border-stone-200 shadow-md hover:bg-stone-50 transition active:scale-95 cursor-pointer touch-manipulation"
+                >
+                  <ChevronRight className="w-5 h-5 text-stone-700" />
                 </button>
-              );
-            })}
+              </div>
+            )}
           </div>
         </div>
       </header>

@@ -206,6 +206,13 @@ export const RestaurantProvider: React.FC<RestaurantProviderProps> = ({ children
   const getTenantUrl = useCallback(
     (subpath: string) => {
       const clean = subpath.startsWith('/') ? subpath : `/${subpath}`;
+      const slug = (targetSlug || DEFAULT_FLAGSHIP_SLUG).toLowerCase();
+      if (clean === '/menu') {
+        return `/r/${slug}/menu`;
+      }
+      if (clean.startsWith('/menu?')) {
+        return `/r/${slug}/menu${clean.slice(5)}`;
+      }
       if (!isTenantRoute) return clean;
       if (clean === '/' || clean === '') return `/r/${targetSlug}`;
       return `/r/${targetSlug}${clean}`;

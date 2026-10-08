@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useAdminAuth } from '../../../context/AdminAuthContext';
 import { soundService } from '../../../utils/audio';
 import { PrintModal } from '../../PrintModal';
+import { formatOrderDateTime, formatOrderDateTimeLong } from '../../../utils/dateUtils';
 import {
   Search,
   Filter,
@@ -20,7 +21,15 @@ import {
   FileText,
   CreditCard,
   Ban,
+  MessageSquare,
+  Check,
 } from 'lucide-react';
+
+const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-3.5 h-3.5' }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+    <path d="M12.031 2C6.516 2 2.031 6.484 2.031 12c0 1.944.557 3.76 1.523 5.305L2 22l4.82-1.508A9.972 9.972 0 0012.031 22c5.516 0 10-4.484 10-10s-4.484-10-10-10zm0 18.25c-1.637 0-3.176-.46-4.507-1.266l-.323-.195-2.875.9.9-2.805-.211-.336A8.22 8.22 0 013.781 12c0-4.55 3.7-8.25 8.25-8.25s8.25 3.7 8.25 8.25-3.7 8.25-8.25 8.25zm4.52-6.176c-.246-.125-1.465-.723-1.691-.809-.227-.082-.391-.125-.555.125-.164.246-.637.809-.781.973-.145.164-.29.184-.535.063-.246-.125-1.04-.383-1.98-1.223-.734-.656-1.23-1.465-1.375-1.71-.145-.246-.016-.379.105-.504.11-.11.246-.29.37-.434.121-.145.164-.246.246-.41.082-.164.041-.312-.02-.434-.063-.125-.555-1.336-.762-1.832-.2-.48-.406-.418-.555-.426l-.473-.008c-.164 0-.434.063-.656.312-.227.246-.867.848-.867 2.066 0 1.219.887 2.398 1.012 2.566.125.164 1.746 2.664 4.227 3.738.59.254 1.05.406 1.41.52.594.191 1.133.164 1.562.1.477-.07 1.465-.6 1.672-1.18.207-.578.207-1.074.145-1.18-.063-.105-.227-.168-.473-.293z" />
+  </svg>
+);
 
 export const OrdersSection: React.FC = () => {
   const { user, restaurant, adminFetch } = useAdminAuth();
@@ -36,6 +45,9 @@ export const OrdersSection: React.FC = () => {
   const [orderToCancel, setOrderToCancel] = useState<any | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [orderToDelete, setOrderToDelete] = useState<any | null>(null);
+  const [sendingFeedbackOrderId, setSendingFeedbackOrderId] = useState<string | null>(null);
+
+  const currentTimezone = restaurantProfile?.timezone || (restaurant as any)?.timezone || 'Asia/Kolkata';
 
   const getItemName = (it: any): string => {
     return it.menuItem?.name || it.name || it.itemName || 'Item';
@@ -44,6 +56,90 @@ export const OrdersSection: React.FC = () => {
   const getItemUnitPrice = (it: any): number => {
     const val = it.unitPrice ?? it.customerUnitPrice ?? it.price ?? it.menuItem?.price ?? 0;
     return Number(val) || 0;
+  };
+
+  const isValidCustomerPhone = (phone?: string | null): boolean => {
+    if (!phone) return false;
+    const digits = phone.replace(/\D/g, '');
+    return digits.length >= 10 && digits.length <= 15;
+  };
+
+  const isDeliveredOrCompleted = (status?: string): boolean => {
+    const s = (status || '').toLowerCase();
+    return s === 'delivered' || s === 'completed' || s === 'settled';
+  };
+
+  const getOrderConfirmedAt = (ord: any): string | undefined => {
+    if (ord?.confirmedAt) return ord.confirmedAt;
+    if (Array.isArray(ord?.statusHistory)) {
+      const conf = ord.statusHistory.find((h: any) => h.status === 'confirmed' || h.status === 'accepted');
+      if (conf && conf.timestamp) return conf.timestamp;
+    }
+    return undefined;
+  };
+
+  const getOrderCompletedAt = (ord: any): string | undefined => {
+    if (ord?.completedAt) return ord.completedAt;
+    if (Array.isArray(ord?.statusHistory)) {
+      const comp = ord.statusHistory.find((h: any) => h.status === 'delivered' || h.status === 'completed');
+      if (comp && comp.timestamp) return comp.timestamp;
+    }
+    return undefined;
+  };
+
+  const handleSendWhatsAppFeedback = async (ord: any) => {
+    if (!ord || !ord.id) return;
+    if (ord.feedbackRequest?.status === 'SENT') {
+      return; // Duplicate protection
+    }
+
+    setSendingFeedbackOrderId(ord.id);
+    try {
+      const res = await adminFetch(`/api/admin/orders/${encodeURIComponent(ord.id)}/feedback`, {
+        method: 'POST',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setOrders((prev) =>
+          prev.map((o) => {
+            if (o.id === ord.id) {
+              return {
+                ...o,
+                feedbackRequest: {
+                  ...(o.feedbackRequest || {}),
+                  status: 'SENT',
+                  sentAt: data.sentAt || new Date().toISOString(),
+                  whatsappMessageId: data.whatsappMessageId,
+                },
+              };
+            }
+            return o;
+          })
+        );
+        if (selectedOrder?.id === ord.id) {
+          setSelectedOrder((prev: any) =>
+            prev
+              ? {
+                  ...prev,
+                  feedbackRequest: {
+                    ...(prev.feedbackRequest || {}),
+                    status: 'SENT',
+                    sentAt: data.sentAt || new Date().toISOString(),
+                    whatsappMessageId: data.whatsappMessageId,
+                  },
+                }
+              : null
+          );
+        }
+        soundService.playChime('notification');
+      } else {
+        alert(`WhatsApp feedback dispatch failed: ${data.error || 'Server error'}`);
+      }
+    } catch (err: any) {
+      alert(`Error sending WhatsApp feedback: ${err.message}`);
+    } finally {
+      setSendingFeedbackOrderId(null);
+    }
   };
 
   useEffect(() => {
@@ -287,6 +383,7 @@ export const OrdersSection: React.FC = () => {
                       <th className="py-3 px-4">Customer</th>
                       <th className="py-3 px-4">Items</th>
                       <th className="py-3 px-4">Total</th>
+                      <th className="py-3 px-4">Confirmed At</th>
                       <th className="py-3 px-4">Status</th>
                       <th className="py-3 px-4 text-right">Action</th>
                     </tr>
@@ -325,6 +422,9 @@ export const OrdersSection: React.FC = () => {
                           <td className="py-3.5 px-4 font-black text-slate-900">
                             ₹{Number(ord.grandTotal || ord.total || 0).toLocaleString('en-IN')}
                           </td>
+                          <td className="py-3.5 px-4 font-medium text-slate-700 whitespace-nowrap">
+                            {formatOrderDateTime(getOrderConfirmedAt(ord), currentTimezone)}
+                          </td>
                           <td className="py-3.5 px-4">
                             <span
                               className={`text-[10px] px-2 py-0.5 rounded-md font-bold uppercase border ${getStatusColor(
@@ -351,6 +451,40 @@ export const OrdersSection: React.FC = () => {
                               >
                                 Details
                               </button>
+                              {/* WhatsApp Feedback button beside Details button */}
+                              {isDeliveredOrCompleted(ord.status) && isValidCustomerPhone(ord.customer?.phone || ord.customerPhone) && (
+                                ord.feedbackRequest?.status === 'SENT' ? (
+                                  <button
+                                    type="button"
+                                    disabled
+                                    className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-300 font-bold text-[10px] flex items-center gap-1 cursor-default opacity-95 whitespace-nowrap"
+                                    title={`Feedback sent on WhatsApp${ord.feedbackRequest.sentAt ? ` at ${formatOrderDateTime(ord.feedbackRequest.sentAt, currentTimezone)}` : ''}`}
+                                  >
+                                    <Check className="w-3 h-3 text-emerald-600 stroke-[2.5]" />
+                                    <span>✓ Sent</span>
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSendWhatsAppFeedback(ord)}
+                                    disabled={sendingFeedbackOrderId === ord.id}
+                                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 disabled:opacity-70 text-white font-bold text-[10px] transition shadow-xs flex items-center gap-1 whitespace-nowrap"
+                                    title="Send WhatsApp Feedback Request"
+                                  >
+                                    {sendingFeedbackOrderId === ord.id ? (
+                                      <>
+                                        <RefreshCw className="w-3 h-3 animate-spin" />
+                                        <span>Sending...</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <WhatsAppIcon className="w-3 h-3 text-white" />
+                                        <span>WhatsApp</span>
+                                      </>
+                                    )}
+                                  </button>
+                                )
+                              )}
                               {ord.status !== 'cancelled' && ord.status !== 'delivered' && (
                                 <button
                                   onClick={() => {
@@ -403,25 +537,57 @@ export const OrdersSection: React.FC = () => {
               </div>
 
               {/* Status & Timing */}
-              <div className="flex items-center justify-between bg-slate-50 p-3 rounded-xl">
-                <div>
-                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Status</span>
-                  <span
-                    className={`inline-block mt-0.5 text-xs px-2.5 py-0.5 rounded-md font-bold uppercase border ${getStatusColor(
-                      selectedOrder.status
-                    )}`}
-                  >
-                    {selectedOrder.status}
-                  </span>
+              <div className="bg-slate-50 p-3 rounded-xl space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block uppercase font-bold">Status</span>
+                    <span
+                      className={`inline-block mt-0.5 text-xs px-2.5 py-0.5 rounded-md font-bold uppercase border ${getStatusColor(
+                        selectedOrder.status
+                      )}`}
+                    >
+                      {selectedOrder.status}
+                    </span>
+                  </div>
+                  {selectedOrder.feedbackRequest && (
+                    <div className="text-right">
+                      <span className="text-[10px] text-slate-400 block uppercase font-bold">Feedback</span>
+                      <span
+                        className={`inline-block mt-0.5 text-[10px] px-2 py-0.5 rounded font-bold ${
+                          selectedOrder.feedbackRequest.status === 'SENT'
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                            : selectedOrder.feedbackRequest.status === 'SCHEDULED'
+                            ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                            : 'bg-slate-200 text-slate-700'
+                        }`}
+                      >
+                        {selectedOrder.feedbackRequest.status === 'SENT'
+                          ? '✓ Feedback Sent'
+                          : `Scheduled (${formatOrderDateTime(selectedOrder.feedbackRequest.scheduledAt, currentTimezone)})`}
+                      </span>
+                    </div>
+                  )}
                 </div>
-                <div className="text-right">
-                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Placed At</span>
-                  <span className="text-xs font-semibold text-slate-700">
-                    {new Date(selectedOrder.createdAt || Date.now()).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </span>
+
+                <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-200/60 text-xs">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block uppercase font-bold">Placed At</span>
+                    <span className="font-semibold text-slate-700 block text-[11px] leading-tight mt-0.5">
+                      {formatOrderDateTime(selectedOrder.createdAt, currentTimezone)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block uppercase font-bold">Confirmed At</span>
+                    <span className="font-semibold text-slate-700 block text-[11px] leading-tight mt-0.5">
+                      {formatOrderDateTime(getOrderConfirmedAt(selectedOrder), currentTimezone)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block uppercase font-bold">Completed At</span>
+                    <span className="font-semibold text-slate-700 block text-[11px] leading-tight mt-0.5">
+                      {formatOrderDateTime(getOrderCompletedAt(selectedOrder), currentTimezone)}
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -654,6 +820,52 @@ export const OrdersSection: React.FC = () => {
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
+
+                {/* WhatsApp Customer Feedback action in drawer */}
+                {isDeliveredOrCompleted(selectedOrder.status) && isValidCustomerPhone(selectedOrder.customer?.phone || selectedOrder.customerPhone) && (
+                  <div className="pt-2 border-t border-slate-100">
+                    <div className="flex items-center justify-between p-2.5 rounded-xl bg-emerald-50/60 border border-emerald-100">
+                      <div>
+                        <div className="text-[11px] font-bold text-emerald-950 flex items-center gap-1.5">
+                          <WhatsAppIcon className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Customer WhatsApp Feedback</span>
+                        </div>
+                        <div className="text-[10px] text-emerald-700">
+                          {selectedOrder.feedbackRequest?.status === 'SENT'
+                            ? `Sent${selectedOrder.feedbackRequest.sentAt ? ` at ${formatOrderDateTime(selectedOrder.feedbackRequest.sentAt, currentTimezone)}` : ''}`
+                            : selectedOrder.feedbackRequest?.status === 'SCHEDULED'
+                            ? `Scheduled at ${formatOrderDateTime(selectedOrder.feedbackRequest.scheduledAt, currentTimezone)} (2 hrs post-completion)`
+                            : 'Send feedback request template immediately'}
+                        </div>
+                      </div>
+                      {selectedOrder.feedbackRequest?.status === 'SENT' ? (
+                        <span className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 font-bold text-[10px] border border-emerald-300 flex items-center gap-1">
+                          <Check className="w-3 h-3 text-emerald-700 stroke-[2.5]" />
+                          <span>✓ Sent</span>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleSendWhatsAppFeedback(selectedOrder)}
+                          disabled={sendingFeedbackOrderId === selectedOrder.id}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-bold text-[10px] shadow-xs flex items-center gap-1.5 transition"
+                        >
+                          {sendingFeedbackOrderId === selectedOrder.id ? (
+                            <>
+                              <RefreshCw className="w-3 h-3 animate-spin" />
+                              <span>Sending...</span>
+                            </>
+                          ) : (
+                            <>
+                              <WhatsAppIcon className="w-3 h-3 text-white" />
+                              <span>Send Now</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

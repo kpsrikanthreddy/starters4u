@@ -94,6 +94,7 @@ export interface QRSessionInfo {
   tableNumber?: string;
   tableId?: string;
   restaurantId?: string;
+  restaurantSlug?: string;
   branchId?: string;
   token?: string;
   isVerified: boolean;
@@ -167,6 +168,16 @@ export interface Order {
   waiterName?: string;
   kotPrintCount?: number;
   receiptPrintCount?: number;
+  confirmedAt?: string;
+  completedAt?: string;
+  feedbackRequest?: {
+    id?: string;
+    status: 'SCHEDULED' | 'SENDING' | 'SENT' | 'FAILED';
+    scheduledAt?: string;
+    sentAt?: string;
+    whatsappMessageId?: string;
+    errorMessage?: string;
+  };
   driverDetails?: {
     name: string;
     phone: string;

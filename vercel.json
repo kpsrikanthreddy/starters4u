@@ -2,9 +2,16 @@
   "version": 2,
   "cleanUrls": true,
   "trailingSlash": false,
+  "redirects": [
+    {
+      "source": "/menu",
+      "destination": "/r/mozz/menu",
+      "permanent": true
+    }
+  ],
   "headers": [
     {
-      "source": "/(admin|restaurant-admin|platform-admin)(.*)",
+      "source": "/(admin|restaurant-admin|platform-admin|print-agent)(.*)",
       "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow, noarchive" }]
     },
     {
@@ -34,7 +41,7 @@
       "destination": "/api"
     },
     {
-      "source": "/(admin|restaurant-admin|platform-admin)(.*)",
+      "source": "/(admin|restaurant-admin|platform-admin|print-agent)(.*)",
       "destination": "/index.html"
     },
     {

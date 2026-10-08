@@ -46,16 +46,9 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   });
 
-  const [user, setUser] = useState<AdminUser | null>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_USER_KEY);
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
-
+  const [user, setUser] = useState<AdminUser | null>(null);
   const [restaurant, setRestaurant] = useState<RestaurantInfo | null>(null);
+  const [isVerified, setIsVerified] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   // Authenticated fetch wrapper that automatically appends Authorization header
@@ -78,9 +71,15 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [token]
   );
 
-  // Verify and refresh active session
+  // Verify and refresh active session with the backend server
   const refreshProfile = useCallback(async () => {
-    if (!token) {
+    const activeToken =
+      token || (typeof window !== 'undefined' ? localStorage.getItem(LOCAL_STORAGE_TOKEN_KEY) : null);
+
+    if (!activeToken) {
+      setUser(null);
+      setRestaurant(null);
+      setIsVerified(false);
       setIsLoading(false);
       return;
     }
@@ -88,7 +87,7 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     try {
       const res = await fetch('/api/admin/me', {
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${activeToken}`,
           'Content-Type': 'application/json',
         },
       });
@@ -97,27 +96,48 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         const data = await res.json();
         if (data.user) {
           setUser(data.user);
-          localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(data.user));
-        if (data.restaurant) {
-          setRestaurant(data.restaurant);
-        } else if (data.user?.restaurantId) {
-          setRestaurant({
-            id: data.user.restaurantId,
-            name: data.user.restaurantName || 'Restaurant Admin',
-            slug: data.user.restaurantSlug || 'restaurant',
-            currency: 'INR',
-          });
+          setToken(activeToken);
+          setIsVerified(true);
+          try {
+            localStorage.setItem(LOCAL_STORAGE_TOKEN_KEY, activeToken);
+            localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(data.user));
+          } catch {}
+
+          if (data.restaurant) {
+            setRestaurant(data.restaurant);
+          } else if (data.user?.restaurantId) {
+            setRestaurant({
+              id: data.user.restaurantId,
+              name: data.user.restaurantName || 'Restaurant Admin',
+              slug: data.user.restaurantSlug || 'restaurant',
+              currency: 'INR',
+            });
+          }
+        } else {
+          throw new Error('User payload missing');
         }
-        }
-      } else if (res.status === 401) {
-        // Session expired or invalid
+      } else {
+        // Token invalid, expired, or rejected by server: clear all credentials immediately
         setToken(null);
         setUser(null);
-        localStorage.removeItem(LOCAL_STORAGE_TOKEN_KEY);
-        localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
+        setRestaurant(null);
+        setIsVerified(false);
+        try {
+          localStorage.removeItem(LOCAL_STORAGE_TOKEN_KEY);
+          localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
+        } catch {}
       }
     } catch (err) {
-      console.warn('[AdminAuth] Notice verifying session profile:', err);
+      console.warn('[AdminAuth] Notice verifying session profile with server:', err);
+      // Fail closed: do not grant access if server validation fails
+      setToken(null);
+      setUser(null);
+      setRestaurant(null);
+      setIsVerified(false);
+      try {
+        localStorage.removeItem(LOCAL_STORAGE_TOKEN_KEY);
+        localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
+      } catch {}
     } finally {
       setIsLoading(false);
     }
@@ -149,17 +169,20 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (res.ok && data.success && data.token) {
         setToken(data.token);
         setUser(data.user);
+        setIsVerified(true);
         if (data.restaurant) {
           setRestaurant(data.restaurant);
         }
-        localStorage.setItem(LOCAL_STORAGE_TOKEN_KEY, data.token);
-        localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(data.user));
+        try {
+          localStorage.setItem(LOCAL_STORAGE_TOKEN_KEY, data.token);
+          localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(data.user));
+        } catch {}
         return { success: true };
       }
 
       return {
         success: false,
-        message: data.error || data.message || 'Authentication failed. Please check your credentials.',
+        message: data.error || data.message || 'Invalid credentials. Please verify your email and password.',
       };
     } catch (err: any) {
       return {
@@ -178,8 +201,11 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setToken(null);
     setUser(null);
     setRestaurant(null);
-    localStorage.removeItem(LOCAL_STORAGE_TOKEN_KEY);
-    localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
+    setIsVerified(false);
+    try {
+      localStorage.removeItem(LOCAL_STORAGE_TOKEN_KEY);
+      localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
+    } catch {}
   };
 
   return (
@@ -188,7 +214,7 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         user,
         restaurant,
         token,
-        isAuthenticated: !!token && !!user,
+        isAuthenticated: Boolean(token && user && isVerified),
         isLoading,
         login,
         logout,

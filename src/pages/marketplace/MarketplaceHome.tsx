@@ -237,7 +237,7 @@ export const MarketplaceHome: React.FC<MarketplaceHomeProps> = ({ onNavigate }) 
 
               <button
                 type="button"
-                onClick={() => onNavigate('/menu')}
+                onClick={() => onNavigate('/r/mozz/menu')}
                 className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-semibold border border-stone-700 transition-colors cursor-pointer"
               >
                 <span>Explore MOZZ Menu</span>

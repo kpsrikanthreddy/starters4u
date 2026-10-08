@@ -109,7 +109,7 @@ export const HomePage: React.FC<HomePageProps> = ({ routeConfig, onOpenShapeGuid
             </a>
 
             <a
-              href="/menu"
+              href="/r/mozz/menu"
               className="px-5 py-3.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-200 font-semibold text-sm transition border border-slate-700/80 flex items-center gap-2"
             >
               <ShoppingBag className="w-4 h-4 text-amber-400" />

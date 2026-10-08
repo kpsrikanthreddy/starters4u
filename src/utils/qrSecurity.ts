@@ -183,8 +183,24 @@ export function resolveEntrySourceFromLocation(location: {
   search: string;
 }): QRSessionInfo {
   const searchParams = new URLSearchParams(location.search);
-  const token = searchParams.get('token') || searchParams.get('t') || '';
+  let token = searchParams.get('token') || searchParams.get('t') || '';
   const pathname = location.pathname.toLowerCase();
+
+  const pathSlugMatch = pathname.match(/^\/r\/([a-zA-Z0-9_-]+)/);
+  const detectedSlug = (pathSlugMatch ? pathSlugMatch[1] : 'mozz').toLowerCase();
+
+  // If token is not in URL, check scoped sessionStorage backup for this restaurant
+  if (!token && typeof window !== 'undefined' && typeof sessionStorage !== 'undefined') {
+    try {
+      const raw = sessionStorage.getItem(`starters4u_verified_qr_session_${detectedSlug}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.token && typeof parsed.token === 'string') {
+          token = parsed.token;
+        }
+      }
+    } catch {}
+  }
 
   // 1. Authenticated Cryptographic Signed Token Session
   if (token) {
@@ -199,6 +215,7 @@ export function resolveEntrySourceFromLocation(location: {
         tableNumber: cleanTable,
         tableId: p.tableId,
         restaurantId: p.restaurantId || p.restaurant,
+        restaurantSlug: detectedSlug || p.restaurant,
         branchId: p.branchId,
         token,
         isVerified: true,

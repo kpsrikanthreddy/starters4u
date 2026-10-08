@@ -58,13 +58,6 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  const handleFillCredentials = (demoEmail: string, demoPin: string, demoSlug: string = 'mozz') => {
-    setEmail(demoEmail);
-    setPassword(demoPin);
-    setRestaurantSlug(demoSlug);
-    setErrorMessage('');
-  };
-
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 sm:px-6 lg:px-8 relative overflow-hidden">
       {/* Ambient background glow */}
@@ -192,55 +185,6 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess }) => {
               )}
             </button>
           </form>
-
-          {/* Quick Demo Credentials for Fast Evaluation */}
-          <div className="mt-6 pt-6 border-t border-slate-800/80">
-            <div className="flex items-center justify-between text-[11px] font-bold text-slate-400 mb-3">
-              <span className="flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                Quick Test Credentials
-              </span>
-              <span className="text-slate-500">Click to fill</span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => handleFillCredentials('admin@mozzpizzateria.com', '8888', 'mozz')}
-                className="p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800 text-left transition flex flex-col text-[11px]"
-              >
-                <div className="flex items-center justify-between font-bold text-slate-200">
-                  <span>🏪 MOZZ Admin</span>
-                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-300">MOZZ</span>
-                </div>
-                <span className="text-[10px] text-slate-400 mt-0.5">PIN: 8888</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleFillCredentials('admin@testrestaurant.com', '8888', 'test-restaurant')}
-                className="p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800 text-left transition flex flex-col text-[11px]"
-              >
-                <div className="flex items-center justify-between font-bold text-slate-200">
-                  <span>🍕 Test Tenant</span>
-                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-400/20 text-indigo-300">Tenant</span>
-                </div>
-                <span className="text-[10px] text-slate-400 mt-0.5">PIN: 8888</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleFillCredentials('superadmin@starters4u.in', '9999', 'platform')}
-                className="p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800 text-left transition flex flex-col text-[11px]"
-              >
-                <div className="flex items-center justify-between font-bold text-slate-200">
-                  <span>🛡️ Super Admin</span>
-                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300">Global</span>
-                </div>
-                <span className="text-[10px] text-slate-400 mt-0.5">PIN: 9999</span>
-              </button>
-            </div>
-          </div>
         </div>
 
         {/* Security Footer Notice */}

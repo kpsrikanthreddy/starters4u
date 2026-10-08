@@ -17,6 +17,11 @@ import {
 import type { PriceSnapshot } from './deliveryPricingEngine.js';
 import { paymentLedgerService } from '../payments/paymentLedgerService.js';
 import { getRestaurantPaymentSettings } from './tenantService.js';
+import {
+  scheduleOrderFeedback,
+  getFeedbackRequestForOrder,
+  getFeedbackRequestsForOrders,
+} from './feedbackService.js';
 
 const DEFAULT_RESTAURANT_ID = 'a0000000-0000-0000-0000-000000000001';
 const DEFAULT_BRANCH_ID = 'b0000000-0000-0000-0000-000000000001';
@@ -84,7 +89,8 @@ export async function assembleOrderObject(
   orderRow: any,
   itemsRows: any[] = [],
   historyRows: any[] = [],
-  customerRow?: any
+  customerRow?: any,
+  feedbackRecord?: any
 ): Promise<Order> {
   const rawCust = customerRow || orderRow.customer_snapshot || {};
   const latRaw = orderRow.customer_latitude ?? orderRow.customer_snapshot?.latitude ?? customerRow?.latitude ?? customerRow?.cust_latitude;
@@ -242,6 +248,36 @@ export async function assembleOrderObject(
     customerLocationAccuracy: accuracy,
     customerLocationCapturedAt: locationCapturedAt,
     customerLocationSource: locationSource,
+    confirmedAt: (() => {
+      let cAt = orderRow.confirmed_at ? new Date(orderRow.confirmed_at).toISOString() : undefined;
+      if (!cAt && historyRows && historyRows.length > 0) {
+        const confHist = historyRows.find((h: any) => h.status === 'confirmed' || h.status === 'accepted');
+        if (confHist && confHist.created_at) {
+          cAt = new Date(confHist.created_at).toISOString();
+        }
+      }
+      return cAt;
+    })(),
+    completedAt: (() => {
+      let compAt = orderRow.completed_at ? new Date(orderRow.completed_at).toISOString() : undefined;
+      if (!compAt && historyRows && historyRows.length > 0) {
+        const compHist = historyRows.find((h: any) => h.status === 'delivered' || h.status === 'completed');
+        if (compHist && compHist.created_at) {
+          compAt = new Date(compHist.created_at).toISOString();
+        }
+      }
+      return compAt;
+    })(),
+    feedbackRequest: feedbackRecord
+      ? {
+          id: feedbackRecord.id,
+          status: feedbackRecord.status,
+          scheduledAt: feedbackRecord.scheduled_at ? new Date(feedbackRecord.scheduled_at).toISOString() : undefined,
+          sentAt: feedbackRecord.sent_at ? new Date(feedbackRecord.sent_at).toISOString() : undefined,
+          whatsappMessageId: feedbackRecord.whatsapp_message_id || undefined,
+          errorMessage: feedbackRecord.error_message || undefined,
+        }
+      : undefined,
     statusHistory,
   };
 
@@ -666,6 +702,7 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
           estimated_delivery_time_minutes, kot_number, kot_station, waiter_name,
           customer_snapshot, customer_latitude, customer_longitude,
           customer_location_accuracy, customer_location_captured_at, customer_location_source,
+          confirmed_at,
           created_at, updated_at
         ) VALUES (
           $1, $2, $3, $4, $5,
@@ -677,6 +714,7 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
           $26, $27, $28, $29,
           $30, $31, $32,
           $33, $34, $35,
+          $36,
           NOW(), NOW()
         ) RETURNING *;
       `;
@@ -733,6 +771,7 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
         customerAccuracy,
         customerCapturedAt,
         customerSource,
+        (initialStatus === 'confirmed' || (initialStatus as string) === 'accepted') ? new Date().toISOString() : null,
       ];
 
       const orderResult = await pgClient.query(insertOrderSql, orderValues);
@@ -760,26 +799,41 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
             NOW()
           ) RETURNING *;
         `;
+        // For ALL NEW orders:
+        // base_unit_price_paise = actual menu_items.price converted to paise
+        // platform_markup_unit_paise = 0
+        // customer_unit_price_paise = base_unit_price_paise
+        // unit_price = actual menu_items.price
+        const baseUnitPricePaise = pItem.pricing.baseUnitPricePaise;
+        const platformMarkupUnitPaise = 0;
+        const customerUnitPricePaise = baseUnitPricePaise;
+        const unitPrice = pItem.pricing.baseUnitPrice;
+        const baseUnitPrice = unitPrice;
+        const platformMarkupUnit = 0;
+        const baseLineTotalPaise = pItem.pricing.baseLineTotalPaise;
+        const platformMarkupLineTotalPaise = 0;
+        const customerLineTotalPaise = baseLineTotalPaise;
+
         const itemValues = [
           internalOrderId,
           restaurantId,
           pItem.resolvedMenuItemUuid,
           pItem.itemName,
           pItem.pricing.quantity,
-          pItem.pricing.customerUnitPrice,
+          unitPrice,
           pItem.shapeCode,
           pItem.item.selectedCrust || null,
           pItem.item.spiceLevel || null,
           JSON.stringify(pItem.item.addons || []),
           pItem.item.specialInstructions || null,
-          pItem.pricing.baseUnitPrice,
-          pItem.pricing.platformMarkupUnit,
-          pItem.pricing.baseUnitPricePaise,
-          pItem.pricing.platformMarkupUnitPaise,
-          pItem.pricing.customerUnitPricePaise,
-          pItem.pricing.baseLineTotalPaise,
-          pItem.pricing.platformMarkupLineTotalPaise,
-          pItem.pricing.customerLineTotalPaise,
+          baseUnitPrice,
+          platformMarkupUnit,
+          baseUnitPricePaise,
+          platformMarkupUnitPaise,
+          customerUnitPricePaise,
+          baseLineTotalPaise,
+          platformMarkupLineTotalPaise,
+          customerLineTotalPaise,
         ];
         const itemRes = await pgClient.query(insertItemSql, itemValues);
         itemRows.push(itemRes.rows[0]);
@@ -904,6 +958,8 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
       locationCapturedAt: customerCapturedAt ?? undefined,
       locationSource: customerSource ?? undefined,
     },
+    confirmed_at: (initialStatus === 'confirmed' || (initialStatus as string) === 'accepted') ? new Date().toISOString() : null,
+    completed_at: null,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -911,6 +967,8 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
 
   const insertedItemRows: any[] = [];
   for (const pItem of processedItems) {
+    const baseUnitPricePaise = pItem.pricing.baseUnitPricePaise;
+    const baseUnitPrice = pItem.pricing.baseUnitPrice;
     const itemRow = {
       id: crypto.randomUUID(),
       order_id: internalOrderId,
@@ -918,15 +976,15 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
       menu_item_id: pItem.resolvedMenuItemUuid || pItem.item.menuItem?.id || null,
       item_name: pItem.itemName,
       quantity: pItem.pricing.quantity,
-      unit_price: pItem.pricing.customerUnitPrice,
-      base_unit_price: pItem.pricing.baseUnitPrice,
-      platform_markup_unit: pItem.pricing.platformMarkupUnit,
-      base_unit_price_paise: pItem.pricing.baseUnitPricePaise,
-      platform_markup_unit_paise: pItem.pricing.platformMarkupUnitPaise,
-      customer_unit_price_paise: pItem.pricing.customerUnitPricePaise,
+      unit_price: baseUnitPrice,
+      base_unit_price: baseUnitPrice,
+      platform_markup_unit: 0,
+      base_unit_price_paise: baseUnitPricePaise,
+      platform_markup_unit_paise: 0,
+      customer_unit_price_paise: baseUnitPricePaise,
       base_line_total_paise: pItem.pricing.baseLineTotalPaise,
-      platform_markup_line_total_paise: pItem.pricing.platformMarkupLineTotalPaise,
-      customer_line_total_paise: pItem.pricing.customerLineTotalPaise,
+      platform_markup_line_total_paise: 0,
+      customer_line_total_paise: pItem.pricing.baseLineTotalPaise,
       selected_shape: pItem.shapeCode,
       selected_crust: pItem.item.selectedCrust || null,
       spice_level: pItem.item.spiceLevel || null,
@@ -1036,7 +1094,7 @@ export async function getOrders(
       if (orderRows.length === 0) return [];
 
       const orderIds = orderRows.map((r) => r.id);
-      const [allItemsRes, allHistRes] = await Promise.all([
+      const [allItemsRes, allHistRes, feedbackMap] = await Promise.all([
         query(
           `SELECT oi.*, mi.item_code, mi.category, mi.dietary_type, mi.description
            FROM order_items oi
@@ -1048,6 +1106,7 @@ export async function getOrders(
           `SELECT * FROM order_status_history WHERE order_id = ANY($1) ORDER BY created_at ASC`,
           [orderIds]
         ),
+        getFeedbackRequestsForOrders(orderIds),
       ]);
 
       const itemsByOrderId = new Map<string, any[]>();
@@ -1068,6 +1127,7 @@ export async function getOrders(
       for (const row of orderRows) {
         const itemRows = itemsByOrderId.get(row.id) || [];
         const histRows = historyByOrderId.get(row.id) || [];
+        const fbRec = feedbackMap[row.id];
         const custObj = row.cust_phone
           ? {
               name: row.cust_name,
@@ -1077,7 +1137,7 @@ export async function getOrders(
               landmark: row.cust_landmark,
             }
           : undefined;
-        const orderObj = await assembleOrderObject(row, itemRows, histRows, custObj);
+        const orderObj = await assembleOrderObject(row, itemRows, histRows, custObj, fbRec);
         results.push(orderObj);
       }
       return results;
@@ -1095,12 +1155,14 @@ export async function getOrders(
     filtered = filtered.filter((o) => o.status === status);
   }
 
+  const feedbackMap = await getFeedbackRequestsForOrders(filtered.map((o) => o.id));
   const results: Order[] = [];
   for (const o of filtered) {
     const items = inMemoryDb.order_items.filter((it) => it.order_id === o.id);
     const history = inMemoryDb.order_status_history.filter((h) => h.order_id === o.id);
     const cust = inMemoryDb.customers.find((c) => c.id === o.customer_id);
-    const orderObj = await assembleOrderObject(o, items, history, cust);
+    const fbRec = feedbackMap[o.id];
+    const orderObj = await assembleOrderObject(o, items, history, cust, fbRec);
     results.push(orderObj);
   }
   return results;
@@ -1139,7 +1201,8 @@ export async function getOrderById(orderIdentifier: string, restaurantId: string
         longitude: row.cust_longitude ?? row.customer_longitude,
       } : undefined;
 
-      return assembleOrderObject(row, itemRows, histRows, custObj);
+      const fbRec = await getFeedbackRequestForOrder(row.id);
+      return assembleOrderObject(row, itemRows, histRows, custObj, fbRec);
     } catch (err) {
       console.error('[OrderService] Error in getOrderById PG:', err);
     }
@@ -1153,7 +1216,8 @@ export async function getOrderById(orderIdentifier: string, restaurantId: string
   const items = inMemoryDb.order_items.filter((it) => it.order_id === row.id);
   const history = inMemoryDb.order_status_history.filter((h) => h.order_id === row.id);
   const cust = inMemoryDb.customers.find((c) => c.id === row.customer_id);
-  return assembleOrderObject(row, items, history, cust);
+  const fbRec = await getFeedbackRequestForOrder(row.id);
+  return assembleOrderObject(row, items, history, cust, fbRec);
 }
 
 export async function updateOrderCustomerLocation(
@@ -1294,13 +1358,20 @@ export async function updateOrderStatus(
     }
   }
 
+  const isConfirmed = newStatus === 'confirmed' || newStatus === 'accepted';
+  const isCompleted = newStatus === 'delivered' || newStatus === 'completed';
+
   if (isPostgresRunning()) {
     try {
       const updateRes = await query(
-        `UPDATE orders SET status = $1, updated_at = NOW()
+        `UPDATE orders
+         SET status = $1,
+             confirmed_at = CASE WHEN $4::boolean AND confirmed_at IS NULL THEN NOW() ELSE confirmed_at END,
+             completed_at = CASE WHEN $5::boolean AND completed_at IS NULL THEN NOW() ELSE completed_at END,
+             updated_at = NOW()
          WHERE (id::text = $2 OR order_number = $2) AND restaurant_id = $3
          RETURNING *`,
-        [newStatus, orderIdentifier, restaurantId]
+        [newStatus, orderIdentifier, restaurantId, isConfirmed, isCompleted]
       );
       if (updateRes.rows.length === 0) return null;
       const order = updateRes.rows[0];
@@ -1317,6 +1388,14 @@ export async function updateOrderStatus(
         await query(
           `UPDATE kots SET status = $1, updated_at = NOW() WHERE order_id = $2 AND restaurant_id = $3`,
           [newStatus === 'delivered' ? 'completed' : 'cancelled', order.id, restaurantId]
+        );
+      }
+
+      // Automatically schedule WhatsApp feedback 2 hours after completion
+      if (isCompleted) {
+        const compTime = order.completed_at ? new Date(order.completed_at) : new Date();
+        await scheduleOrderFeedback(order, compTime).catch((err) =>
+          console.error('[OrderService] Error auto-scheduling feedback:', err.message)
         );
       }
 
@@ -1343,6 +1422,13 @@ export async function updateOrderStatus(
   inMemoryDb.orders[orderIdx].status = newStatus;
   inMemoryDb.orders[orderIdx].updated_at = new Date().toISOString();
 
+  if (isConfirmed && !inMemoryDb.orders[orderIdx].confirmed_at) {
+    inMemoryDb.orders[orderIdx].confirmed_at = new Date().toISOString();
+  }
+  if (isCompleted && !inMemoryDb.orders[orderIdx].completed_at) {
+    inMemoryDb.orders[orderIdx].completed_at = new Date().toISOString();
+  }
+
   inMemoryDb.order_status_history.push({
     id: crypto.randomUUID(),
     order_id: orderId,
@@ -1355,6 +1441,15 @@ export async function updateOrderStatus(
   const kot = inMemoryDb.kots.find((k) => k.order_id === orderId);
   if (kot) {
     kot.status = newStatus === 'delivered' ? 'completed' : newStatus === 'cancelled' ? 'cancelled' : 'active';
+  }
+
+  if (isCompleted) {
+    const compTime = inMemoryDb.orders[orderIdx].completed_at
+      ? new Date(inMemoryDb.orders[orderIdx].completed_at)
+      : new Date();
+    await scheduleOrderFeedback(inMemoryDb.orders[orderIdx], compTime).catch((err) =>
+      console.error('[OrderService] Error auto-scheduling feedback in-mem:', err.message)
+    );
   }
 
   const inMemUpdated = await getOrderById(orderId, restaurantId);

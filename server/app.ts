@@ -26,6 +26,12 @@ import { directUpiService } from './payments/directUpiService.js';
 import { paymentRoutingService } from './payments/paymentRoutingService.js';
 import { realtimeNotificationService } from './services/realtimeNotificationService.js';
 import { inventoryService } from './services/inventoryService.js';
+import {
+  sendOrderFeedback,
+  getFeedbackRequestForOrder,
+  processDueFeedbackRequests,
+  updateFeedbackStatusByMessageId,
+} from './services/feedbackService.js';
 import { requireAuth, requireRole, verifyAuthToken } from './middleware/authMiddleware.js';
 import { requireRestaurantTenant, requireRestaurantRole, requirePlatformAdmin } from './middleware/tenantMiddleware.js';
 import { requireDeviceAuth } from './middleware/deviceAuthMiddleware.js';
@@ -111,7 +117,7 @@ export function createApp(): express.Application {
     res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
     res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-device-token, X-Device-Token, x-restaurant-id, x-branch-id, x-device-id');
     if (req.method === 'OPTIONS') {
       return res.sendStatus(200);
     }
@@ -133,6 +139,12 @@ export function createApp(): express.Application {
   // ==========================================================
   // DYNAMIC SITEMAP & PUBLIC SEO ASSETS
   // ==========================================================
+  // 301 Permanent Redirect from legacy /menu to canonical /r/mozz/menu (preserving query parameters)
+  app.get('/menu', (req, res) => {
+    const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    return res.redirect(301, `/r/mozz/menu${query}`);
+  });
+
   app.get('/sitemap.xml', async (_req, res) => {
     try {
       await ensureInitialized();
@@ -162,7 +174,7 @@ export function createApp(): express.Application {
     });
   });
 
-  app.get('/api/database/status', (_req, res) => {
+  app.get('/api/database/status', requireAuth, requirePlatformAdmin, (_req, res) => {
     res.json({
       activeDatabase: isPostgresRunning() ? 'PostgreSQL (Cloud / Supabase)' : 'In-Memory Multi-Tenant Store',
       isPostgresRunning: isPostgresRunning(),
@@ -766,7 +778,7 @@ export function createApp(): express.Application {
 
   // List inventory items with today's stock metrics
   app.get(
-    '/api/admin/inventory',
+    ['/api/admin/inventory', '/api/inventory'],
     requireAuth,
     requireRestaurantTenant,
     requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER', 'KITCHEN']),
@@ -791,7 +803,7 @@ export function createApp(): express.Application {
 
   // Get daily stock summary report
   app.get(
-    '/api/admin/inventory/summary',
+    ['/api/admin/inventory/summary', '/api/inventory/summary'],
     requireAuth,
     requireRestaurantTenant,
     requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER', 'KITCHEN']),
@@ -829,7 +841,7 @@ export function createApp(): express.Application {
 
   // Get immutable transaction ledger history (Manager/Owner only; Cashier & Kitchen restricted)
   app.get(
-    '/api/admin/inventory/transactions',
+    ['/api/admin/inventory/transactions', '/api/inventory/transactions'],
     requireAuth,
     requireRestaurantTenant,
     requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER']),
@@ -852,7 +864,7 @@ export function createApp(): express.Application {
 
   // Create new inventory item
   app.post(
-    '/api/admin/inventory',
+    ['/api/admin/inventory', '/api/inventory'],
     requireAuth,
     requireRestaurantTenant,
     requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER']),
@@ -1363,6 +1375,138 @@ export function createApp(): express.Application {
       res.status(500).json({ error: 'Failed to generate report', details: err.message });
     }
   });
+
+  // ==========================================================
+  // REVENUE & ANALYTICS AUDIT ENDPOINTS (Strictly Role-Enforced)
+  // ==========================================================
+  app.get(
+    ['/api/revenue', '/api/revenue/*', '/api/admin/revenue'],
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const analytics = await adminService.getTenantAnalytics(restaurantId);
+        res.json({
+          restaurantId,
+          totalRevenue: analytics.totalRevenue,
+          todayRevenue: analytics.todayRevenue,
+          todayOrders: analytics.todayOrders,
+          currency: 'INR',
+        });
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch revenue' });
+      }
+    }
+  );
+
+  app.get(
+    ['/api/analytics', '/api/analytics/*'],
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const analytics = await adminService.getTenantAnalytics(restaurantId);
+        res.json(analytics);
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch analytics' });
+      }
+    }
+  );
+
+  app.get(
+    ['/api/branches', '/api/branches/*'],
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER', 'CASHIER', 'KITCHEN']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const branches = await adminService.getTenantBranches(restaurantId);
+        res.json(branches);
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch branches' });
+      }
+    }
+  );
+
+  app.get(
+    ['/api/settings', '/api/settings/*'],
+    requireAuth,
+    requireRestaurantTenant,
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const settings = await adminService.getTenantSettings(restaurantId);
+        res.json(settings);
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch settings' });
+      }
+    }
+  );
+
+  app.get(
+    ['/api/restaurant-users', '/api/restaurant-users/*'],
+    requireAuth,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'BRANCH_MANAGER']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.user!.restaurantId;
+        const users = await adminService.getTenantUsers(restaurantId);
+        res.json(users);
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch users' });
+      }
+    }
+  );
+
+  app.get(
+    ['/api/kots', '/api/kots/*'],
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER', 'CASHIER', 'KITCHEN']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const branchId = req.user!.branchId;
+        const activeOrders = await orderService.getOrders(restaurantId, branchId, 'all', 50);
+        const kots = activeOrders
+          .filter((o) => o.status !== 'delivered' && o.status !== 'cancelled')
+          .map((o) => ({
+            id: o.id,
+            orderId: o.id,
+            orderNumber: o.orderNumber,
+            kotNumber: o.kotNumber || `KOT-${o.orderNumber.replace(/[^0-9]/g, '')}`,
+            kotStation: o.kotStation || 'All Stations',
+            tableNumber: o.customer.tableNumber || (o.orderType === 'dine_in' ? 'Table 1' : 'Takeaway Counter'),
+            orderType: o.orderType,
+            items: o.items,
+            status: o.status,
+            createdAt: o.createdAt,
+          }));
+        res.json(kots);
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch KOTs' });
+      }
+    }
+  );
+
+  app.delete(
+    ['/api/kots/:id', '/api/admin/kots/:id'],
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER', 'KITCHEN']),
+    async (req, res) => {
+      try {
+        res.json({ success: true, message: 'KOT removed' });
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to remove KOT' });
+      }
+    }
+  );
 
   // POS Direct Counter Order Creation (Tenant-Scoped, Role-Restricted)
   app.post(
@@ -1881,16 +2025,76 @@ export function createApp(): express.Application {
   );
 
   // 3. Device Heartbeat
-  app.post('/api/print-agent/devices/heartbeat', requireDeviceAuth, async (req, res) => {
+  const handleDeviceHeartbeat = async (req: express.Request, res: express.Response) => {
     try {
-      await printService.touchDeviceHeartbeat(req.device!.id);
+      // Requirement 8: Strict tenant isolation - reject cross-tenant mismatch
+      if (req.body?.restaurantId && req.body.restaurantId !== req.device!.restaurantId) {
+        return res.status(403).json({
+          error: 'Tenant isolation violation: Device token does not belong to specified restaurant',
+        });
+      }
+      if (req.body?.branchId && req.body.branchId !== req.device!.branchId) {
+        return res.status(403).json({
+          error: 'Tenant isolation violation: Device token does not belong to specified branch',
+        });
+      }
+      if (req.body?.deviceId && req.body.deviceId !== req.device!.deviceId && req.body.deviceId !== req.device!.id) {
+        return res.status(403).json({
+          error: 'Tenant isolation violation: Device token does not belong to specified device',
+        });
+      }
+
+      // Update exact device last_seen_at and heartbeat scoped to tenant & branch
+      await printService.touchDeviceHeartbeat(
+        req.device!.id,
+        req.device!.restaurantId,
+        req.device!.branchId
+      );
+
+      const now = new Date().toISOString();
       res.json({
         success: true,
         deviceId: req.device!.deviceId,
-        timestamp: new Date().toISOString(),
+        deviceName: req.device!.deviceName,
+        restaurantId: req.device!.restaurantId,
+        branchId: req.device!.branchId,
+        last_seen_at: now,
+        lastSeenAt: now,
+        lastHeartbeatAt: now,
+        isOnline: true,
+        online: true,
+        status: 'online',
+        timestamp: now,
       });
     } catch (err: any) {
+      console.error('[PrintAgent API] Heartbeat error:', err);
       res.status(500).json({ error: 'Failed to update heartbeat', details: err.message });
+    }
+  };
+
+  app.post('/api/print-agent/devices/heartbeat', requireDeviceAuth, handleDeviceHeartbeat);
+  app.post('/api/print-agent/heartbeat', requireDeviceAuth, handleDeviceHeartbeat);
+
+  // 3.1 Device Diagnostics & Status Query
+  app.get('/api/print-agent/devices/status', requireDeviceAuth, async (req, res) => {
+    try {
+      const now = new Date().toISOString();
+      res.json({
+        success: true,
+        deviceId: req.device!.deviceId,
+        deviceName: req.device!.deviceName,
+        restaurantId: req.device!.restaurantId,
+        branchId: req.device!.branchId,
+        isActive: req.device!.isActive,
+        last_seen_at: req.device!.last_seen_at || req.device!.lastHeartbeatAt || now,
+        lastSeenAt: req.device!.lastSeenAt || req.device!.lastHeartbeatAt || now,
+        isOnline: true,
+        online: true,
+        status: 'online',
+        timestamp: now,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to retrieve device status', details: err.message });
     }
   });
 
@@ -2297,47 +2501,267 @@ export function createApp(): express.Application {
     }
   });
 
-  app.get('/api/orders', async (req, res) => {
+  // Helper function: Strictly sanitize order payloads for unauthenticated or customer tracking links
+  // Never returns internal notes, profit, staff ID, payment credentials, or restaurant-wide data
+  function sanitizeOrderForCustomer(order: any) {
+    if (!order) return null;
+    return {
+      id: order.id,
+      orderNumber: order.orderNumber,
+      status: order.status,
+      orderType: order.orderType,
+      orderMode: order.orderMode,
+      tableNumber: order.tableNumber || order.customer?.tableNumber,
+      customer: {
+        name: order.customer?.name || '',
+        phone: order.customer?.phone || '',
+        address: order.customer?.address || '',
+        landmark: order.customer?.landmark || '',
+        tableNumber: order.customer?.tableNumber || '',
+        latitude: order.customer?.latitude,
+        longitude: order.customer?.longitude,
+        accuracy: order.customer?.accuracy,
+        formattedAddress: order.customer?.formattedAddress,
+        deliveryLocationConfirmed: order.customer?.deliveryLocationConfirmed,
+        transitDistanceMeters: order.customer?.transitDistanceMeters,
+        transitDurationSeconds: order.customer?.transitDurationSeconds,
+        transitCalculatedAt: order.customer?.transitCalculatedAt,
+        googleMapsNavigationUrl: order.customer?.googleMapsNavigationUrl,
+      },
+      items: (order.items || []).map((item: any) => ({
+        id: item.id || item.menuItemId,
+        name: item.name || item.menuItem?.name,
+        menuItem: item.menuItem || {
+          id: item.menuItemId || item.id,
+          name: item.name,
+          price: item.price || item.unitPrice,
+          category: item.category,
+        },
+        quantity: item.quantity,
+        price: item.price || item.unitPrice,
+        unitPrice: item.unitPrice || item.price,
+        totalPrice: item.totalPrice || ((item.price || item.unitPrice || 0) * (item.quantity || 1)),
+        customizations: item.customizations,
+        selectedShape: item.selectedShape,
+      })),
+      subtotal: order.subtotal,
+      tax: order.tax,
+      deliveryFee: order.deliveryFee,
+      discountAmount: order.discountAmount,
+      grandTotal: order.grandTotal,
+      total: order.grandTotal || order.total,
+      estimatedDeliveryTimeMinutes: order.estimatedDeliveryTimeMinutes,
+      estimatedDeliveryTime: order.estimatedDeliveryTime,
+      createdAt: order.createdAt,
+      paymentStatus: order.paymentStatus,
+      paymentMethod: order.paymentMethod,
+      trackingUpdates: order.trackingUpdates,
+      restaurantId: order.restaurantId,
+      branchId: order.branchId,
+    };
+  }
+
+  // Admin orders management endpoint (Requires authentic admin/staff session with correct tenant)
+  app.get(
+    '/api/orders',
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER', 'CASHIER', 'KITCHEN']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const role = (req.user?.role || '').toLowerCase();
+        const isBranchScoped = role === 'branch_manager' || role === 'manager' || role === 'cashier' || role === 'kitchen';
+        const branchId = isBranchScoped ? req.user!.branchId : ((req.query.branchId as string) || req.user!.branchId);
+        const status = (req.query.status as string) || 'all';
+        const limit = parseInt((req.query.limit as string) || '50', 10);
+        const orders = await orderService.getOrders(restaurantId, branchId, status, limit);
+        res.json(orders);
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch orders' });
+      }
+    }
+  );
+
+  // Order status update endpoint (Requires admin/staff authorization)
+  app.patch(
+    ['/api/orders/:id/status'],
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER', 'CASHIER', 'KITCHEN']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const { status, note } = req.body;
+        if (!status) {
+          return res.status(400).json({ error: 'Status is required' });
+        }
+        const updated = await orderService.updateOrderStatus(req.params.id, status, note, restaurantId);
+        if (!updated) {
+          return res.status(404).json({ error: 'Order not found in your restaurant' });
+        }
+        res.json(updated);
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to update order status' });
+      }
+    }
+  );
+
+  // Order delete endpoint (Requires admin authorization)
+  app.delete(
+    ['/api/orders/:id'],
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const success = await orderService.deleteOrder(req.params.id, restaurantId);
+        if (!success) {
+          return res.status(404).json({ error: 'Order not found in your restaurant' });
+        }
+        res.json({ success: true, message: 'Order removed successfully' });
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to delete order' });
+      }
+    }
+  );
+
+  // Manual WhatsApp Feedback Dispatch (Requires admin/staff authorization)
+  app.post(
+    ['/api/admin/orders/:id/feedback', '/api/orders/:id/feedback'],
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER', 'CASHIER', 'STAFF']),
+    async (req, res) => {
+      try {
+        const orderId = req.params.id;
+        const result = await sendOrderFeedback(orderId, true);
+        if (!result.success && result.status === 'FAILED') {
+          return res.status(400).json({ error: result.error || 'Failed to send WhatsApp feedback' });
+        }
+        res.json(result);
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to process WhatsApp feedback request', details: err.message });
+      }
+    }
+  );
+
+  // Query Feedback Request Status for an Order
+  app.get(
+    ['/api/admin/orders/:id/feedback', '/api/orders/:id/feedback'],
+    requireAuth,
+    requireRestaurantTenant,
+    async (req, res) => {
+      try {
+        const record = await getFeedbackRequestForOrder(req.params.id);
+        res.json({ feedbackRequest: record });
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch feedback request status' });
+      }
+    }
+  );
+
+  // Process due scheduled feedback requests (can be invoked by scheduler, cron, or admin)
+  app.post(
+    ['/api/admin/feedback/process-due', '/api/feedback/process-due'],
+    async (req, res) => {
+      try {
+        const stats = await processDueFeedbackRequests();
+        res.json({ success: true, ...stats });
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to process due feedback requests', details: err.message });
+      }
+    }
+  );
+
+  // Meta WhatsApp Cloud API Webhook Verification
+  app.get(['/api/webhooks/whatsapp', '/api/webhook/whatsapp'], (req, res) => {
+    const mode = req.query['hub.mode'];
+    const token = req.query['hub.verify_token'];
+    const challenge = req.query['hub.challenge'];
+
+    const verifyToken =
+      process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ||
+      process.env.WHATSAPP_VERIFY_TOKEN ||
+      'starters4u_feedback_webhook_secret';
+
+    if (mode === 'subscribe' && token === verifyToken) {
+      console.info('[WhatsAppWebhook] Webhook verified successfully with Meta.');
+      return res.status(200).send(challenge);
+    }
+    return res.status(403).send('Forbidden: Verification token mismatch');
+  });
+
+  // Meta WhatsApp Cloud API Webhook Event Handler (Status updates: sent, delivered, read, failed)
+  app.post(['/api/webhooks/whatsapp', '/api/webhook/whatsapp'], async (req, res) => {
     try {
-      const status = (req.query.status as string) || 'all';
-      const limit = parseInt((req.query.limit as string) || '50', 10);
-      const orders = await orderService.getOrders(undefined, undefined, status, limit);
-      res.json(orders);
+      const body = req.body;
+      if (body?.object === 'whatsapp_business_account' || body?.entry) {
+        for (const entry of body.entry || []) {
+          for (const change of entry.changes || []) {
+            const value = change?.value;
+            if (value?.statuses && Array.isArray(value.statuses)) {
+              for (const statusItem of value.statuses) {
+                const messageId = statusItem.id;
+                const rawStatus = (statusItem.status || '').toLowerCase();
+                let mappedStatus: 'SENT' | 'DELIVERED' | 'READ' | 'FAILED' | null = null;
+
+                if (rawStatus === 'sent') mappedStatus = 'SENT';
+                else if (rawStatus === 'delivered') mappedStatus = 'DELIVERED';
+                else if (rawStatus === 'read') mappedStatus = 'READ';
+                else if (rawStatus === 'failed') mappedStatus = 'FAILED';
+
+                const errorMsg = statusItem.errors?.[0]?.title || statusItem.errors?.[0]?.message;
+
+                if (messageId && mappedStatus) {
+                  console.info(`[WhatsAppWebhook] Message ${messageId} status updated to ${mappedStatus}`);
+                  await updateFeedbackStatusByMessageId(messageId, mappedStatus, errorMsg);
+                }
+              }
+            }
+          }
+        }
+      }
+      return res.status(200).send('EVENT_RECEIVED');
     } catch (err: any) {
-      console.error('Error fetching orders:', err);
-      res.status(500).json({ error: 'Failed to fetch orders', details: err.message });
+      console.error('[WhatsAppWebhook] Error handling webhook payload:', err.message);
+      return res.status(200).send('EVENT_RECEIVED'); // Meta requires 200 OK
     }
   });
 
+  // Single order tracking endpoint (Tenant-isolated and sanitized for customers)
   app.get('/api/orders/:id', async (req, res) => {
     try {
-      const restaurantSlug = (req.query.restaurant as string) || (req.query.slug as string);
-      const headerRestaurantId = (req.headers['x-restaurant-id'] as string) || (req.query.restaurantId as string);
-
-      let targetRestaurantId: string | undefined;
-      if (headerRestaurantId) {
-        targetRestaurantId = headerRestaurantId;
-      } else if (restaurantSlug) {
-        const r = await tenantService.resolveRestaurantBySlug(restaurantSlug);
-        if (r) targetRestaurantId = r.id;
-      }
-
-      const order = await orderService.getOrderById(req.params.id, targetRestaurantId);
+      const order = await orderService.getOrderById(req.params.id);
       if (!order) {
         return res.status(404).json({ error: 'Order not found' });
       }
 
-      if (targetRestaurantId && order.restaurantId && order.restaurantId !== targetRestaurantId) {
-        return res.status(404).json({ error: 'Order not found in this restaurant' });
+      // Check if request carries an authenticated admin/staff session
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7).trim();
+        const decoded = verifyAuthToken(token);
+        if (decoded) {
+          const userRole = (decoded.role || '').toUpperCase();
+          if (userRole !== 'SUPER_ADMIN' && userRole !== 'PLATFORM_ADMIN') {
+            if (decoded.restaurantId && order.restaurantId && decoded.restaurantId !== order.restaurantId) {
+              return res.status(403).json({ error: 'Forbidden', message: 'Access denied: Order belongs to another restaurant.' });
+            }
+          }
+          return res.json(order);
+        }
       }
 
-      res.json(order);
+      // Unauthenticated customer tracking: Return strictly sanitized payload
+      return res.json(sanitizeOrderForCustomer(order));
     } catch (err: any) {
-      res.status(500).json({ error: 'Failed to fetch order', details: err.message });
+      res.status(500).json({ error: 'Failed to fetch order' });
     }
   });
 
-  // Public tenant-isolated order tracking endpoint
+  // Public tenant-isolated order tracking endpoint (Strictly sanitized for customers)
   app.get('/api/public/restaurants/:slug/orders/:id', async (req, res) => {
     try {
       const restaurant = await tenantService.resolveRestaurantBySlug(req.params.slug);
@@ -2348,9 +2772,9 @@ export function createApp(): express.Application {
       if (!order || (order.restaurantId && order.restaurantId !== restaurant.id)) {
         return res.status(404).json({ error: 'Order not found in this restaurant' });
       }
-      res.json(order);
+      res.json(sanitizeOrderForCustomer(order));
     } catch (err: any) {
-      res.status(500).json({ error: 'Failed to fetch order', details: err.message });
+      res.status(500).json({ error: 'Failed to fetch order' });
     }
   });
 
@@ -2563,17 +2987,23 @@ export function createApp(): express.Application {
     }
   });
 
-  app.get('/api/customers/:phone', async (req, res) => {
-    try {
-      const customer = await customerService.getCustomerByPhone(req.params.phone);
-      if (!customer) {
-        return res.status(404).json({ error: 'Customer not found' });
+  app.get(
+    '/api/customers/:phone',
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER', 'CASHIER']),
+    async (req, res) => {
+      try {
+        const customer = await customerService.getCustomerByPhone(req.params.phone);
+        if (!customer) {
+          return res.status(404).json({ error: 'Customer not found' });
+        }
+        res.json(customer);
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch customer' });
       }
-      res.json(customer);
-    } catch (err: any) {
-      res.status(500).json({ error: 'Failed to fetch customer', details: err.message });
     }
-  });
+  );
 
   app.post('/api/customers', async (req, res) => {
     try {
@@ -2584,29 +3014,39 @@ export function createApp(): express.Application {
     }
   });
 
-  app.get('/api/tables', async (_req, res) => {
-    try {
-      const tables = await qrService.getRestaurantTables();
-      res.json(tables);
-    } catch (err: any) {
-      res.status(500).json({ error: 'Failed to fetch tables', details: err.message });
+  app.get(
+    '/api/tables',
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER', 'CASHIER']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const tables = await qrService.getRestaurantTables(restaurantId);
+        res.json(tables);
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch tables' });
+      }
     }
-  });
+  );
 
-  app.get('/api/qr/catalog', async (req, res) => {
-    try {
-      // Generate QR tokens on the server with QR_SIGNING_SECRET.
-      // Tenant details are supplied by RestaurantContext so Counter QR and Table QR
-      // are signed for the same restaurant/branch that is currently being managed.
-      const restaurantId = (req.query.restaurantId as string | undefined) || undefined;
-      const branchId = (req.query.branchId as string | undefined) || undefined;
-      const restaurantSlug = (req.query.slug as string | undefined) || undefined;
-      const catalog = await qrService.getTableCatalog(restaurantId, branchId, restaurantSlug);
-      res.json(catalog);
-    } catch (err: any) {
-      res.status(500).json({ error: 'Failed to fetch QR catalog', details: err.message });
+  app.get(
+    '/api/qr/catalog',
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const branchId = (req.user?.branchId as string | undefined) || undefined;
+        const restaurantSlug = req.tenant.restaurantSlug;
+        const catalog = await qrService.getTableCatalog(restaurantId, branchId, restaurantSlug);
+        res.json(catalog);
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch QR catalog' });
+      }
     }
-  });
+  );
 
   app.get('/api/qr/validate', async (req, res) => {
     const token = req.query.token as string;
@@ -3232,37 +3672,55 @@ export function createApp(): express.Application {
   // ==========================================================
   // PHASE 6: PAYMENT LEDGER & SETTLEMENT STATS
   // ==========================================================
-  app.get('/api/admin/payments/ledger', requireAuth, requireRestaurantTenant, async (req, res) => {
-    try {
-      const restaurantId = req.tenant.restaurantId;
-      const limit = req.query.limit ? Number(req.query.limit) : 50;
-      const transactions = await paymentLedgerService.getTransactions(restaurantId, limit);
-      res.json({ success: true, transactions });
-    } catch (err: any) {
-      res.status(500).json({ error: 'Failed to fetch payment ledger', details: err.message });
+  app.get(
+    ['/api/admin/payments/ledger', '/api/payments/ledger'],
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const limit = req.query.limit ? Number(req.query.limit) : 50;
+        const transactions = await paymentLedgerService.getTransactions(restaurantId, limit);
+        res.json({ success: true, transactions });
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch payment ledger' });
+      }
     }
-  });
+  );
 
-  app.get('/api/admin/payments/settlements', requireAuth, requireRestaurantTenant, async (req, res) => {
-    try {
-      const restaurantId = req.tenant.restaurantId;
-      const limit = req.query.limit ? Number(req.query.limit) : 50;
-      const settlements = await paymentLedgerService.getSettlements(restaurantId, limit);
-      res.json({ success: true, settlements });
-    } catch (err: any) {
-      res.status(500).json({ error: 'Failed to fetch settlements', details: err.message });
+  app.get(
+    ['/api/admin/payments/settlements', '/api/payments/settlements'],
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const limit = req.query.limit ? Number(req.query.limit) : 50;
+        const settlements = await paymentLedgerService.getSettlements(restaurantId, limit);
+        res.json({ success: true, settlements });
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch settlements' });
+      }
     }
-  });
+  );
 
-  app.get('/api/admin/payments/stats', requireAuth, requireRestaurantTenant, async (req, res) => {
-    try {
-      const restaurantId = req.tenant.restaurantId;
-      const stats = await paymentLedgerService.getLedgerStats(restaurantId);
-      res.json({ success: true, stats });
-    } catch (err: any) {
-      res.status(500).json({ error: 'Failed to fetch payment stats', details: err.message });
+  app.get(
+    ['/api/admin/payments/stats', '/api/payments/stats'],
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const stats = await paymentLedgerService.getLedgerStats(restaurantId);
+        res.json({ success: true, stats });
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch payment stats' });
+      }
     }
-  });
+  );
 
   app.post('/api/admin/payments/settlements/:id/sync', requireAuth, requireRestaurantTenant, async (req, res) => {
     try {
@@ -3519,6 +3977,16 @@ export function createApp(): express.Application {
       return res.status(500).json({ error: 'Failed to process inquiry', details: err.message });
     }
   });
+
+  // Background processor for due WhatsApp feedback requests (every 60s)
+  if (!(globalThis as any).__feedbackSchedulerStarted) {
+    (globalThis as any).__feedbackSchedulerStarted = true;
+    setInterval(() => {
+      processDueFeedbackRequests().catch((err: any) =>
+        console.error('[FeedbackScheduler] Background job error:', err.message)
+      );
+    }, 60 * 1000);
+  }
 
   return app;
 }

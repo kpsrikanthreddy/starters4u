@@ -272,7 +272,12 @@ export async function authenticateAdminUser(
     if (user.pin_hash && (user.pin_hash.startsWith('$2a$') || user.pin_hash.startsWith('$2b$'))) {
       isValid = await verifyPassword(cleanPass, user.pin_hash);
     } else {
-      isValid = cleanPass === user.pin_hash || cleanPass === '8888' || cleanPass === '9999';
+      // In production, unhashed plain text PINs are strictly disallowed
+      if (process.env.NODE_ENV === 'production') {
+        isValid = false;
+      } else {
+        isValid = await verifyPassword(cleanPass, user.pin_hash);
+      }
     }
 
     if (isValid) {
@@ -319,58 +324,10 @@ export async function authenticateAdminUser(
     }
   }
 
-  // 3. Fallback support for default credentials if setup is fresh
-  if (cleanEmail === 'admin@mozzpizzateria.com' && cleanPass === '8888') {
-    const authUser: AuthenticatedUser = {
-      userId: 'c0000000-0000-0000-0000-000000000001',
-      name: 'Store Manager (Admin)',
-      email: 'admin@mozzpizzateria.com',
-      role: 'RESTAURANT_OWNER',
-      restaurantId: DEFAULT_RESTAURANT_ID,
-      branchId: DEFAULT_BRANCH_ID,
-      restaurantName: 'MOZZ Chinese & Pizzateria',
-      branchName: 'Main Outlet',
-      restaurantSlug: 'mozz',
-    };
-    return {
-      success: true,
-      token: signAuthToken(authUser),
-      user: authUser,
-      restaurant: {
-        id: DEFAULT_RESTAURANT_ID,
-        name: 'MOZZ Chinese & Pizzateria',
-        slug: 'mozz',
-        currency: 'INR',
-      },
-    };
-  }
-
-  if (cleanEmail === 'superadmin@starters4u.in' && cleanPass === '9999') {
-    const authUser: AuthenticatedUser = {
-      userId: 's0000000-0000-0000-0000-000000000001',
-      name: 'Platform Super Admin',
-      email: 'superadmin@starters4u.in',
-      role: 'SUPER_ADMIN',
-      restaurantId: DEFAULT_RESTAURANT_ID,
-      restaurantName: 'Starters4U Global Multi-Tenant Platform',
-      restaurantSlug: 'platform',
-    };
-    return {
-      success: true,
-      token: signAuthToken(authUser),
-      user: authUser,
-      restaurant: {
-        id: DEFAULT_RESTAURANT_ID,
-        name: 'Starters4U Multi-Tenant Platform',
-        slug: 'platform',
-        currency: 'INR',
-      },
-    };
-  }
-
+  // Generic secure failure response (prevents account enumeration and eliminates backdoors)
   return {
     success: false,
-    message: 'Invalid email address, password, or PIN. Please check your credentials.',
+    message: 'Invalid credentials. Please verify your email and password or PIN.',
   };
 }
 

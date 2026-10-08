@@ -87,6 +87,11 @@ export async function getPlatformPricingConfig(): Promise<PlatformPricingConfig>
 
 /**
  * Authoritative server-side price evaluation for any menu item.
+ * For all new orders:
+ * base_unit_price_paise = actual menu_items.price converted to paise
+ * platform_markup_unit_paise = 0
+ * customer_unit_price_paise = base_unit_price_paise
+ * unit_price = actual menu_items.price
  */
 export async function getAuthoritativeItemPrice(
   basePrice: number,
@@ -100,30 +105,14 @@ export async function getAuthoritativeItemPrice(
   customerUnitPrice: number;
 }> {
   const basePaise = toPaise(basePrice);
-  if (orderType !== 'delivery' || basePaise <= 0) {
-    return {
-      baseUnitPricePaise: basePaise,
-      platformMarkupUnitPaise: 0,
-      customerUnitPricePaise: basePaise,
-      baseUnitPrice: toRupees(basePaise),
-      platformMarkupUnit: 0,
-      customerUnitPrice: toRupees(basePaise),
-    };
-  }
-
-  const config = await getPlatformPricingConfig();
-  const bandSizePaise = config.priceBandSizeRupees * 100;
-  const markupStepPaise = config.markupStepRupees * 100;
-
-  const markupPaise = calculateDeliveryMarkupPaise(basePaise, bandSizePaise, markupStepPaise);
-  const customerPaise = basePaise + markupPaise;
+  const priceRupees = toRupees(basePaise);
 
   return {
     baseUnitPricePaise: basePaise,
-    platformMarkupUnitPaise: markupPaise,
-    customerUnitPricePaise: customerPaise,
-    baseUnitPrice: toRupees(basePaise),
-    platformMarkupUnit: toRupees(markupPaise),
-    customerUnitPrice: toRupees(customerPaise),
+    platformMarkupUnitPaise: 0,
+    customerUnitPricePaise: basePaise,
+    baseUnitPrice: priceRupees,
+    platformMarkupUnit: 0,
+    customerUnitPrice: priceRupees,
   };
 }

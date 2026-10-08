@@ -274,6 +274,8 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_longitude NUMERIC(10, 7);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_location_accuracy NUMERIC(10, 2);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_location_captured_at TIMESTAMP;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_location_source VARCHAR(30);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 
 -- ==========================================================
@@ -305,6 +307,14 @@ ALTER TABLE order_items ADD COLUMN IF NOT EXISTS spice_level VARCHAR(50);
 ALTER TABLE order_items ADD COLUMN IF NOT EXISTS addons JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE order_items ADD COLUMN IF NOT EXISTS special_instructions TEXT;
 ALTER TABLE order_items ADD COLUMN IF NOT EXISTS item_metadata JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS base_unit_price NUMERIC(10, 2);
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS platform_markup_unit NUMERIC(10, 2) DEFAULT 0.00;
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS base_unit_price_paise INT;
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS platform_markup_unit_paise INT DEFAULT 0;
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS customer_unit_price_paise INT;
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS base_line_total_paise INT;
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS platform_markup_line_total_paise INT DEFAULT 0;
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS customer_line_total_paise INT;
 
 -- ==========================================================
 -- 10. ORDER STATUS HISTORY (Audit Trail)
@@ -510,11 +520,15 @@ CREATE TABLE IF NOT EXISTS print_devices (
     platform VARCHAR(50) DEFAULT 'win32',
     app_version VARCHAR(50) DEFAULT '1.0.0',
     is_active BOOLEAN DEFAULT TRUE,
+    last_seen_at TIMESTAMPTZ DEFAULT NOW(),
     last_heartbeat_at TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT unique_restaurant_branch_device UNIQUE (restaurant_id, branch_id, device_id)
 );
+
+-- Ensure last_seen_at column exists for existing tables
+ALTER TABLE print_devices ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ DEFAULT NOW();
 
 CREATE TABLE IF NOT EXISTS device_pairing_codes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -712,5 +726,26 @@ CREATE TABLE IF NOT EXISTS restaurant_onboarding (
 
 CREATE INDEX IF NOT EXISTS idx_restaurant_onboarding_restaurant ON restaurant_onboarding(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_restaurant_onboarding_status ON restaurant_onboarding(overall_status);
+
+-- ==========================================================
+-- 23. CUSTOMER FEEDBACK REQUESTS (WhatsApp Cloud API Integration)
+-- ==========================================================
+CREATE TABLE IF NOT EXISTS customer_feedback_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    order_id UUID UNIQUE NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    customer_phone VARCHAR(50) NOT NULL,
+    template_name VARCHAR(100) NOT NULL DEFAULT 'glossylooks_customer_feedback',
+    scheduled_at TIMESTAMPTZ NOT NULL,
+    sent_at TIMESTAMPTZ,
+    whatsapp_message_id VARCHAR(255),
+    status VARCHAR(20) NOT NULL DEFAULT 'SCHEDULED' CHECK (status IN ('SCHEDULED', 'SENDING', 'SENT', 'DELIVERED', 'READ', 'FAILED')),
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_due ON customer_feedback_requests(status, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_feedback_order ON customer_feedback_requests(order_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_restaurant ON customer_feedback_requests(restaurant_id);
 
 

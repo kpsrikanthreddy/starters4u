@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Starters4U Print Agent</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #020617;
+      color: #f8fafc;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .container {
+      width: 100%;
+      max-width: 800px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #1e293b;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge-online { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-offline { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    .card {
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 20px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+    }
+    h1 { font-size: 20px; font-weight: 900; }
+    h2 { font-size: 16px; font-weight: 800; margin-bottom: 16px; color: #f1f5f9; }
+    p.desc { font-size: 13px; color: #94a3b8; margin-top: 4px; }
+    .form-group { margin-bottom: 16px; }
+    label { display: block; font-size: 12px; font-weight: 700; color: #cbd5e1; margin-bottom: 6px; }
+    input[type="text"], input[type="url"] {
+      width: 100%;
+      background: #020617;
+      border: 1px solid #334155;
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    input:focus { outline: none; border-color: #f43f5e; ring: 1px solid #f43f5e; }
+    .code-input {
+      font-size: 24px !important;
+      font-family: monospace !important;
+      letter-spacing: 0.3em;
+      text-align: center;
+      color: #f43f5e !important;
+      font-weight: 900;
+    }
+    button {
+      padding: 12px 20px;
+      border-radius: 12px;
+      border: none;
+      font-weight: 800;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-primary { background: #e11d48; color: #fff; width: 100%; }
+    .btn-primary:hover { background: #f43f5e; }
+    .btn-secondary { background: #1e293b; color: #cbd5e1; border: 1px solid #334155; }
+    .btn-secondary:hover { background: #334155; color: #fff; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .diag-box {
+      background: #020617;
+      border: 1px solid #1e293b;
+      padding: 14px;
+      border-radius: 14px;
+    }
+    .diag-title { font-size: 10px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 4px; }
+    .diag-val { font-size: 13px; font-weight: 700; color: #f8fafc; word-break: break-all; }
+    .diag-sub { font-size: 11px; font-family: monospace; color: #94a3b8; margin-top: 2px; word-break: break-all; }
+    .error-msg { background: rgba(225, 29, 72, 0.15); border: 1px solid rgba(225, 29, 72, 0.3); color: #fda4af; padding: 12px; border-radius: 12px; font-size: 12px; margin-bottom: 16px; }
+    .hint { font-size: 11px; color: #94a3b8; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <h1>Starters4U Print Agent</h1>
+        <p class="desc">Windows Desktop POS & Thermal Printing Companion</p>
+      </div>
+      <div id="statusBadge" class="badge badge-offline">
+        <span class="pulse-dot"></span>
+        <span id="statusText">Agent Offline</span>
+      </div>
+    </div>
+
+    <!-- Pairing Form -->
+    <div id="pairingCard" class="card" style="display: none;">
+      <h2>Pair Hardware Terminal</h2>
+      <p class="desc" style="margin-bottom: 16px;">Enter the 6-digit code generated from <strong>Restaurant Admin &gt; Print Devices</strong>.</p>
+      <div id="pairingError" class="error-msg" style="display: none;"></div>
+      <form id="pairForm">
+        <div class="form-group">
+          <label>Backend Base URL</label>
+          <input type="url" id="backendUrlInput" required value="https://www.starters4u.in" />
+          <p class="hint">Use https://www.starters4u.in. Do not use admin.starters4u.in.</p>
+        </div>
+        <div class="form-group">
+          <label>6-Digit Pairing Code</label>
+          <input type="text" id="pairingCodeInput" class="code-input" maxlength="6" pattern="[0-9]{6}" required placeholder="000000" />
+        </div>
+        <div class="form-group">
+          <label>Terminal Device Name</label>
+          <input type="text" id="deviceNameInput" required value="Front Counter POS Terminal" />
+        </div>
+        <button type="submit" class="btn-primary" id="pairBtn">Pair Terminal</button>
+      </form>
+    </div>
+
+    <!-- Active Terminal Dashboard -->
+    <div id="activeCard" class="card" style="display: none;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h2>Paired Terminal Diagnostics</h2>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" class="btn-secondary" id="manualHeartbeatBtn">Send Heartbeat Now</button>
+          <button type="button" class="btn-secondary" id="unpairBtn" style="color: #fda4af;">Unpair</button>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="diag-box">
+          <div class="diag-title">Paired Restaurant</div>
+          <div class="diag-val" id="diagRestaurantName">-</div>
+          <div class="diag-sub" id="diagRestaurantId">-</div>
+        </div>
+        <div class="diag-box">
+          <div class="diag-title">Paired Branch</div>
+          <div class="diag-val" id="diagBranchName">-</div>
+          <div class="diag-sub" id="diagBranchId">-</div>
+        </div>
+        <div class="diag-box">
+          <div class="diag-title">Device ID</div>
+          <div class="diag-val" id="diagDeviceId">-</div>
+          <div class="diag-sub" id="diagDeviceName">-</div>
+        </div>
+        <div class="diag-box">
+          <div class="diag-title">Backend Base URL</div>
+          <div class="diag-val" style="color: #34d399;" id="diagBackendUrl">-</div>
+          <div class="diag-sub">Strictly HTTPS</div>
+        </div>
+        <div class="diag-box">
+          <div class="diag-title">Last Successful Heartbeat</div>
+          <div class="diag-val" id="diagLastHeartbeat">Awaiting heartbeat...</div>
+          <div class="diag-sub" id="diagLastHeartbeatTime">-</div>
+        </div>
+        <div class="diag-box">
+          <div class="diag-title">Last API Error</div>
+          <div class="diag-val" id="diagLastError" style="color: #34d399;">None (Healthy)</div>
+          <div class="diag-sub" id="diagErrorDetails">Operational</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const KEYS = {
+      DEVICE_ID: 'starters4u_print_device_id',
+      DEVICE_NAME: 'starters4u_print_device_name',
+      RESTAURANT_ID: 'starters4u_print_restaurant_id',
+      RESTAURANT_NAME: 'starters4u_print_restaurant_name',
+      BRANCH_ID: 'starters4u_print_branch_id',
+      BRANCH_NAME: 'starters4u_print_branch_name',
+      BACKEND_URL: 'starters4u_print_backend_url',
+      DEVICE_TOKEN: 'starters4u_print_device_token'
+    };
+
+    let lastHeartbeatMs = 0;
+    let heartbeatTimer = null;
+
+    function getCleanUrl(url) {
+      let clean = (url || '').trim().replace(/\/+$/, '');
+      if (clean.includes('admin.starters4u.in')) clean = clean.replace('admin.starters4u.in', 'www.starters4u.in');
+      if (clean === 'https://starters4u.in' || clean === 'http://starters4u.in' || clean === 'starters4u.in') {
+        clean = 'https://www.starters4u.in';
+      }
+      if (!clean.startsWith('http://') && !clean.startsWith('https://')) clean = 'https://' + clean;
+      return clean;
+    }
+
+    function checkOnline() {
+      const now = Date.now();
+      const diff = now - lastHeartbeatMs;
+      const isOnline = lastHeartbeatMs > 0 && diff <= 90000 && diff >= -120000;
+      const badge = document.getElementById('statusBadge');
+      const text = document.getElementById('statusText');
+      if (isOnline) {
+        badge.className = 'badge badge-online';
+        text.innerText = 'Agent Online';
+      } else {
+        badge.className = 'badge badge-offline';
+        text.innerText = 'Agent Offline';
+      }
+    }
+
+    async function sendHeartbeat() {
+      const token = localStorage.getItem(KEYS.DEVICE_TOKEN);
+      const backendUrl = getCleanUrl(localStorage.getItem(KEYS.BACKEND_URL) || window.location.origin);
+      const deviceId = localStorage.getItem(KEYS.DEVICE_ID);
+      const restaurantId = localStorage.getItem(KEYS.RESTAURANT_ID);
+      const branchId = localStorage.getItem(KEYS.BRANCH_ID);
+
+      if (!token) return;
+
+      try {
+        const res = await fetch(`${backendUrl}/api/print-agent/devices/heartbeat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+            'x-device-token': token
+          },
+          body: JSON.stringify({ deviceId, restaurantId, branchId })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
+          lastHeartbeatMs = Date.now();
+          document.getElementById('diagLastHeartbeat').innerText = 'Just now';
+          document.getElementById('diagLastHeartbeatTime').innerText = new Date().toLocaleTimeString();
+          document.getElementById('diagLastError').innerText = 'None (Healthy)';
+          document.getElementById('diagLastError').style.color = '#34d399';
+          document.getElementById('diagErrorDetails').innerText = 'Operational';
+        } else {
+          lastHeartbeatMs = 0;
+          document.getElementById('diagLastError').innerText = data.error || ('HTTP ' + res.status);
+          document.getElementById('diagLastError').style.color = '#f43f5e';
+          document.getElementById('diagErrorDetails').innerText = new Date().toLocaleTimeString();
+        }
+      } catch (err) {
+        lastHeartbeatMs = 0;
+        document.getElementById('diagLastError').innerText = err.message || 'Network error';
+        document.getElementById('diagLastError').style.color = '#f43f5e';
+        document.getElementById('diagErrorDetails').innerText = new Date().toLocaleTimeString();
+      }
+      checkOnline();
+    }
+
+    function renderUI() {
+      const token = localStorage.getItem(KEYS.DEVICE_TOKEN);
+      if (token) {
+        document.getElementById('pairingCard').style.display = 'none';
+        document.getElementById('activeCard').style.display = 'block';
+        document.getElementById('diagRestaurantName').innerText = localStorage.getItem(KEYS.RESTAURANT_NAME) || 'Starters4U Restaurant';
+        document.getElementById('diagRestaurantId').innerText = 'ID: ' + (localStorage.getItem(KEYS.RESTAURANT_ID) || '-');
+        document.getElementById('diagBranchName').innerText = localStorage.getItem(KEYS.BRANCH_NAME) || 'Main Branch';
+        document.getElementById('diagBranchId').innerText = 'ID: ' + (localStorage.getItem(KEYS.BRANCH_ID) || '-');
+        document.getElementById('diagDeviceId').innerText = localStorage.getItem(KEYS.DEVICE_ID) || '-';
+        document.getElementById('diagDeviceName').innerText = localStorage.getItem(KEYS.DEVICE_NAME) || '-';
+        document.getElementById('diagBackendUrl').innerText = getCleanUrl(localStorage.getItem(KEYS.BACKEND_URL) || window.location.origin);
+      } else {
+        document.getElementById('pairingCard').style.display = 'block';
+        document.getElementById('activeCard').style.display = 'none';
+        const defaultUrl = window.location.origin && !window.location.hostname.startsWith('admin.') ? window.location.origin : 'https://www.starters4u.in';
+        document.getElementById('backendUrlInput').value = defaultUrl;
+      }
+      checkOnline();
+    }
+
+    document.getElementById('pairForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const code = document.getElementById('pairingCodeInput').value.trim();
+      const backendUrl = getCleanUrl(document.getElementById('backendUrlInput').value);
+      const deviceName = document.getElementById('deviceNameInput').value.trim();
+      const deviceId = 'win-pos-' + Math.random().toString(36).substring(2, 8);
+      const errBox = document.getElementById('pairingError');
+      errBox.style.display = 'none';
+
+      try {
+        const res = await fetch(`${backendUrl}/api/print-agent/devices/pair`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pairingCode: code,
+            deviceId,
+            deviceName,
+            platform: 'win32',
+            appVersion: '1.0.0'
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Pairing failed. The code may be invalid or expired.');
+        }
+
+        localStorage.setItem(KEYS.DEVICE_ID, data.deviceId || deviceId);
+        localStorage.setItem(KEYS.DEVICE_NAME, deviceName);
+        localStorage.setItem(KEYS.RESTAURANT_ID, data.restaurantId || data.restaurant?.id);
+        localStorage.setItem(KEYS.RESTAURANT_NAME, data.restaurant?.name || 'Restaurant');
+        localStorage.setItem(KEYS.BRANCH_ID, data.branchId || data.branch?.id);
+        localStorage.setItem(KEYS.BRANCH_NAME, data.branch?.name || 'Main Branch');
+        localStorage.setItem(KEYS.BACKEND_URL, backendUrl);
+        localStorage.setItem(KEYS.DEVICE_TOKEN, data.deviceToken || data.token);
+
+        renderUI();
+        sendHeartbeat();
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        heartbeatTimer = setInterval(sendHeartbeat, 30000);
+      } catch (err) {
+        errBox.innerText = err.message;
+        errBox.style.display = 'block';
+      }
+    });
+
+    document.getElementById('manualHeartbeatBtn').addEventListener('click', sendHeartbeat);
+
+    document.getElementById('unpairBtn').addEventListener('click', () => {
+      if (confirm('Unpair this terminal?')) {
+        Object.values(KEYS).forEach(k => localStorage.removeItem(k));
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        lastHeartbeatMs = 0;
+        renderUI();
+      }
+    });
+
+    renderUI();
+    if (localStorage.getItem(KEYS.DEVICE_TOKEN)) {
+      sendHeartbeat();
+      heartbeatTimer = setInterval(sendHeartbeat, 30000);
+    }
+    setInterval(checkOnline, 5000);
+  </script>
+</body>
+</html>

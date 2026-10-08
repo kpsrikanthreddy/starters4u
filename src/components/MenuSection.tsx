@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
 import { FoodCategory, DietaryType, PizzaShape } from '../types';
 import { FoodCard } from './FoodCard';
@@ -15,6 +15,8 @@ import {
   Filter,
   X,
   Layers,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 
 interface MenuSectionProps {
@@ -34,10 +36,57 @@ export const MenuSection: React.FC<MenuSectionProps> = ({
   const [dietaryFilter, setDietaryFilter] = useState<DietaryType | 'all'>('all');
   const [onlyPocketPizzas, setOnlyPocketPizzas] = useState(false);
 
+  // Horizontal scroll state & ref for category tabs
+  const categoryScrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const checkScroll = useCallback(() => {
+    const el = categoryScrollRef.current;
+    if (!el) return;
+    const { scrollLeft, scrollWidth, clientWidth } = el;
+    setCanScrollLeft(scrollLeft > 4);
+    setCanScrollRight(scrollLeft + clientWidth < scrollWidth - 4);
+  }, []);
+
+  useEffect(() => {
+    checkScroll();
+    const timer = setTimeout(checkScroll, 100);
+    const el = categoryScrollRef.current;
+    if (!el) return () => clearTimeout(timer);
+
+    const handleResize = () => checkScroll();
+    window.addEventListener('resize', handleResize);
+
+    const ro = new ResizeObserver(() => checkScroll());
+    ro.observe(el);
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('resize', handleResize);
+      ro.disconnect();
+    };
+  }, [checkScroll, selectedCategory]);
+
+  const handleScroll = (direction: 'left' | 'right') => {
+    const el = categoryScrollRef.current;
+    if (!el) return;
+    const scrollAmount = Math.max(el.clientWidth * 0.65, 200);
+    el.scrollBy({
+      left: direction === 'left' ? -scrollAmount : scrollAmount,
+      behavior: 'smooth',
+    });
+  };
+
   // Dynamic category tabs based on active menu items
   const categoryTabs = useMemo(() => {
     return getActiveCategoryTabs(menu, true);
   }, [menu]);
+
+  // Re-check scroll buttons when categoryTabs change
+  useEffect(() => {
+    checkScroll();
+  }, [categoryTabs, checkScroll]);
 
   // Filtered menu logic
   const filteredMenu = useMemo(() => {
@@ -81,38 +130,70 @@ export const MenuSection: React.FC<MenuSectionProps> = ({
     <section id="menu-section" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
       {/* Category Scrollable Filter Tabs */}
       <div className="bg-white/90 backdrop-blur-md p-2 rounded-2xl border border-slate-200 shadow-xs sticky top-18 z-30">
-        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 text-xs">
-          {categoryTabs.map((tab) => {
-            const isSelected =
-              selectedCategory === tab.id ||
-              normalizeCategorySlug(selectedCategory) === normalizeCategorySlug(tab.id);
-            return (
+        <div className="relative flex items-center">
+          {canScrollLeft && (
+            <div className="absolute left-0 top-0 bottom-0 z-10 flex items-center pr-2 pl-0.5 bg-gradient-to-r from-white via-white/95 to-transparent rounded-l-xl">
               <button
-                key={tab.id}
-                onClick={() => {
-                  onSelectCategory(tab.id);
-                  if (tab.id.includes('pocket_pizza') || tab.id === 'dessert_pizza') {
-                    setOnlyPocketPizzas(false);
-                  }
-                }}
-                className={`px-4 py-2.5 rounded-xl font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-                  isSelected
-                    ? 'bg-rose-600 text-white shadow-md ring-2 ring-rose-600 font-extrabold'
-                    : 'bg-white text-slate-700 hover:text-slate-950 hover:bg-slate-100 border border-slate-200/90'
-                }`}
+                type="button"
+                onClick={() => handleScroll('left')}
+                aria-label="Scroll left"
+                className="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center rounded-xl bg-white text-slate-700 hover:text-slate-900 border border-slate-200 shadow-md hover:bg-slate-50 transition active:scale-95 cursor-pointer touch-manipulation"
               >
-                <span>{tab.icon}</span>
-                <span>{tab.name}</span>
-                <span
-                  className={`text-[10px] px-1.5 py-0.5 rounded-full font-black ${
-                    isSelected ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-600 border border-slate-200'
+                <ChevronLeft className="w-5 h-5 text-slate-700" />
+              </button>
+            </div>
+          )}
+
+          <div
+            ref={categoryScrollRef}
+            onScroll={checkScroll}
+            className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 text-xs w-full scroll-smooth"
+          >
+            {categoryTabs.map((tab) => {
+              const isSelected =
+                selectedCategory === tab.id ||
+                normalizeCategorySlug(selectedCategory) === normalizeCategorySlug(tab.id);
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    onSelectCategory(tab.id);
+                    if (tab.id.includes('pocket_pizza') || tab.id === 'dessert_pizza') {
+                      setOnlyPocketPizzas(false);
+                    }
+                  }}
+                  className={`px-4 py-2.5 rounded-xl font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+                    isSelected
+                      ? 'bg-rose-600 text-white shadow-md ring-2 ring-rose-600 font-extrabold'
+                      : 'bg-white text-slate-700 hover:text-slate-950 hover:bg-slate-100 border border-slate-200/90'
                   }`}
                 >
-                  {tab.count}
-                </span>
+                  <span>{tab.icon}</span>
+                  <span>{tab.name}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded-full font-black ${
+                      isSelected ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-600 border border-slate-200'
+                    }`}
+                  >
+                    {tab.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {canScrollRight && (
+            <div className="absolute right-0 top-0 bottom-0 z-10 flex items-center pl-2 pr-0.5 bg-gradient-to-l from-white via-white/95 to-transparent rounded-r-xl">
+              <button
+                type="button"
+                onClick={() => handleScroll('right')}
+                aria-label="Scroll right"
+                className="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center rounded-xl bg-white text-slate-700 hover:text-slate-900 border border-slate-200 shadow-md hover:bg-slate-50 transition active:scale-95 cursor-pointer touch-manipulation"
+              >
+                <ChevronRight className="w-5 h-5 text-slate-700" />
               </button>
-            );
-          })}
+            </div>
+          )}
         </div>
       </div>
 

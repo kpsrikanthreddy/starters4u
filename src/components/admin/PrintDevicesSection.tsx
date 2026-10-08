@@ -38,7 +38,12 @@ interface PrintDevice {
   platform: string;
   appVersion: string;
   isActive: boolean;
+  last_seen_at?: string;
+  lastSeenAt?: string;
   lastHeartbeatAt: string;
+  isOnline?: boolean;
+  online?: boolean;
+  status?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -116,27 +121,32 @@ export const PrintDevicesSection: React.FC = () => {
   }, [adminFetch, user?.branchId]);
 
   // Fetch registered print devices for the restaurant
-  const fetchDevices = useCallback(async () => {
-    setLoadingDevices(true);
-    setApiError(null);
-    try {
-      const queryParam = selectedBranchId ? `?branchId=${encodeURIComponent(selectedBranchId)}` : '';
-      const res = await adminFetch(`/api/admin/print-devices${queryParam}`);
-      if (res.ok) {
-        const data = await res.json();
-        setDevices(data);
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setApiError(err.error || 'Failed to load print devices.');
+  const fetchDevices = useCallback(
+    async (showLoading = false) => {
+      if (showLoading || devices.length === 0) {
+        setLoadingDevices(true);
       }
-    } catch (err: any) {
-      setApiError(err.message || 'Network error fetching print devices.');
-    } finally {
-      setLoadingDevices(false);
-    }
-  }, [adminFetch, selectedBranchId]);
+      setApiError(null);
+      try {
+        const queryParam = selectedBranchId ? `?branchId=${encodeURIComponent(selectedBranchId)}` : '';
+        const res = await adminFetch(`/api/admin/print-devices${queryParam}`);
+        if (res.ok) {
+          const data = await res.json();
+          setDevices(data);
+        } else {
+          const err = await res.json().catch(() => ({}));
+          setApiError(err.error || 'Failed to load print devices.');
+        }
+      } catch (err: any) {
+        setApiError(err.message || 'Network error fetching print devices.');
+      } finally {
+        setLoadingDevices(false);
+      }
+    },
+    [adminFetch, selectedBranchId, devices.length]
+  );
 
-  // Initial load
+  // Initial load & Requirement 7: polling every 10s so status updates within 30 seconds
   useEffect(() => {
     if (isPermitted) {
       fetchBranches();
@@ -145,7 +155,12 @@ export const PrintDevicesSection: React.FC = () => {
 
   useEffect(() => {
     if (isPermitted) {
-      fetchDevices();
+      fetchDevices(true);
+      // Requirement 7: Poll print devices status every 10 seconds
+      const pollInterval = setInterval(() => {
+        fetchDevices(false);
+      }, 10000);
+      return () => clearInterval(pollInterval);
     }
   }, [isPermitted, fetchDevices]);
 
@@ -257,7 +272,8 @@ export const PrintDevicesSection: React.FC = () => {
     if (!isoString) return 'Never';
     const date = new Date(isoString);
     const diffSeconds = Math.floor((Date.now() - date.getTime()) / 1000);
-    if (diffSeconds < 60) return 'Just now';
+    if (diffSeconds < 0 || diffSeconds < 30) return 'Just now';
+    if (diffSeconds < 60) return `${diffSeconds}s ago`;
     if (diffSeconds < 120) return '1 minute ago';
     if (diffSeconds < 3600) return `${Math.floor(diffSeconds / 60)}m ago`;
     if (diffSeconds < 86400) return `${Math.floor(diffSeconds / 3600)}h ago`;
@@ -265,12 +281,20 @@ export const PrintDevicesSection: React.FC = () => {
   };
 
   // Check device status
+  // Requirement 4: Device should be Online when last_seen_at is within 90 seconds; otherwise Offline.
   const getDeviceStatus = (device: PrintDevice) => {
     if (!device.isActive) {
       return { label: 'Revoked', color: 'bg-slate-100 text-slate-600 border-slate-300', isOnline: false };
     }
-    const diffMs = Date.now() - new Date(device.lastHeartbeatAt).getTime();
-    const isOnline = diffMs < 2 * 60 * 1000; // online if heartbeat within 2 minutes
+    const lastSeen = device.last_seen_at || device.lastSeenAt || device.lastHeartbeatAt;
+    if (!lastSeen) {
+      return { label: 'Offline', color: 'bg-amber-50 text-amber-700 border-amber-200', isOnline: false };
+    }
+    const diffMs = Date.now() - new Date(lastSeen).getTime();
+    const isOnline = Boolean(
+      device.isOnline ??
+        (device.online ?? (device.status === 'online' || (diffMs <= 90 * 1000 && diffMs >= -120000)))
+    );
     if (isOnline) {
       return { label: 'Online', color: 'bg-emerald-50 text-emerald-700 border-emerald-200', isOnline: true };
     }
@@ -553,8 +577,17 @@ export const PrintDevicesSection: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3">
+            <a
+              href="/print-agent"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs transition flex items-center gap-1.5 border border-rose-200 cursor-pointer"
+            >
+              <Radio className="w-3.5 h-3.5 text-rose-600 animate-pulse" />
+              <span>Launch Print Agent</span>
+            </a>
             <button
-              onClick={fetchDevices}
+              onClick={() => fetchDevices(true)}
               disabled={loadingDevices}
               className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition flex items-center gap-1.5 cursor-pointer"
             >
@@ -630,15 +663,23 @@ export const PrintDevicesSection: React.FC = () => {
                       </td>
 
                       <td className="px-5 py-4 text-slate-600">
-                        <div className="font-medium">{formatHeartbeat(device.lastHeartbeatAt)}</div>
-                        {device.lastHeartbeatAt && (
-                          <div className="text-[10px] text-slate-400">
-                            {new Date(device.lastHeartbeatAt).toLocaleTimeString([], {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                          </div>
-                        )}
+                        {(() => {
+                          const lastSeen = device.last_seen_at || device.lastSeenAt || device.lastHeartbeatAt;
+                          return (
+                            <>
+                              <div className="font-medium">{formatHeartbeat(lastSeen)}</div>
+                              {lastSeen && (
+                                <div className="text-[10px] text-slate-400">
+                                  {new Date(lastSeen).toLocaleTimeString([], {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    second: '2-digit',
+                                  })}
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
                       </td>
 
                       <td className="px-5 py-4 text-slate-600">

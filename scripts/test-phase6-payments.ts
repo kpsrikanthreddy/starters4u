@@ -123,26 +123,22 @@ async function runPhase6Tests() {
     // -------------------------------------------------------------------------
     console.log('--- 1. DELIVERY PRICING ARITHMETIC & FORMULA ---');
 
-    await test('Formula (floor(base_price / 100) + 1) * 10 matches exact test cases', () => {
-      // Base: ₹50 -> floor(50/100) = 0 -> (0 + 1) * 10 = ₹10 markup (Customer pays ₹60)
-      assert.strictEqual(calculateDeliveryMarkupRupees(50), 10);
-      assert.strictEqual(calculateDeliveryMarkupPaise(toPaise(50)), toPaise(10));
+    await test('Delivery platform markup is ₹0 for all new orders', () => {
+      // Platform markup is disabled for all new orders (platform_markup_unit_paise = 0)
+      assert.strictEqual(calculateDeliveryMarkupRupees(50), 0);
+      assert.strictEqual(calculateDeliveryMarkupPaise(toPaise(50)), 0);
 
-      // Base: ₹100 -> floor(100/100) = 1 -> (1 + 1) * 10 = ₹20 markup (Customer pays ₹120)
-      assert.strictEqual(calculateDeliveryMarkupRupees(100), 20);
-      assert.strictEqual(calculateDeliveryMarkupPaise(toPaise(100)), toPaise(20));
+      assert.strictEqual(calculateDeliveryMarkupRupees(100), 0);
+      assert.strictEqual(calculateDeliveryMarkupPaise(toPaise(100)), 0);
 
-      // Base: ₹199 -> floor(199/100) = 1 -> (1 + 1) * 10 = ₹20 markup (Customer pays ₹219)
-      assert.strictEqual(calculateDeliveryMarkupRupees(199), 20);
-      assert.strictEqual(calculateDeliveryMarkupPaise(toPaise(199)), toPaise(20));
+      assert.strictEqual(calculateDeliveryMarkupRupees(199), 0);
+      assert.strictEqual(calculateDeliveryMarkupPaise(toPaise(199)), 0);
 
-      // Base: ₹200 -> floor(200/100) = 2 -> (2 + 1) * 10 = ₹30 markup (Customer pays ₹230)
-      assert.strictEqual(calculateDeliveryMarkupRupees(200), 30);
-      assert.strictEqual(calculateDeliveryMarkupPaise(toPaise(200)), toPaise(30));
+      assert.strictEqual(calculateDeliveryMarkupRupees(200), 0);
+      assert.strictEqual(calculateDeliveryMarkupPaise(toPaise(200)), 0);
 
-      // Base: ₹500 -> floor(500/100) = 5 -> (5 + 1) * 10 = ₹60 markup (Customer pays ₹560)
-      assert.strictEqual(calculateDeliveryMarkupRupees(500), 60);
-      assert.strictEqual(calculateDeliveryMarkupPaise(toPaise(500)), toPaise(60));
+      assert.strictEqual(calculateDeliveryMarkupRupees(500), 0);
+      assert.strictEqual(calculateDeliveryMarkupPaise(toPaise(500)), 0);
     });
 
     await test('Dine-In, Takeaway, and Counter channels apply ₹0 markup', () => {
@@ -166,8 +162,8 @@ async function runPhase6Tests() {
       assert.strictEqual(toRupees(p1), 19.99);
 
       const items = [
-        calculateItemLinePricing(149, 2, 'delivery'), // ₹149 + ₹20 = ₹169 each -> ₹338
-        calculateItemLinePricing(299, 1, 'delivery'), // ₹299 + ₹30 = ₹329 each -> ₹329
+        calculateItemLinePricing(149, 2, 'delivery'), // ₹149 + ₹0 = ₹149 each -> ₹298
+        calculateItemLinePricing(299, 1, 'delivery'), // ₹299 + ₹0 = ₹299 each -> ₹299
       ];
 
       const summary = calculateOrderPaymentSummary({
@@ -234,21 +230,20 @@ async function runPhase6Tests() {
       assert.ok(order.items && order.items.length === 1);
 
       const item = order.items[0];
-      // Base: ₹199 -> Markup: ₹20 -> Customer Unit: ₹219
+      // For all new orders: platform_markup_unit_paise = 0, customer_unit_price = base_unit_price
       assert.strictEqual(item.baseUnitPrice, 199);
-      assert.strictEqual(item.platformMarkupUnit, 20);
-      assert.strictEqual(item.customerUnitPrice, 219);
+      assert.strictEqual(item.platformMarkupUnit, 0);
+      assert.strictEqual(item.customerUnitPrice, 199);
       assert.strictEqual(item.baseUnitPricePaise, 19900);
-      assert.strictEqual(item.platformMarkupUnitPaise, 2000);
-      assert.strictEqual(item.customerUnitPricePaise, 21900);
+      assert.strictEqual(item.platformMarkupUnitPaise, 0);
+      assert.strictEqual(item.customerUnitPricePaise, 19900);
 
       // Order Splits check:
       assert.strictEqual(order.restaurantSubtotal, 199);
-      assert.strictEqual(order.platformMarkupTotal, 20);
-      assert.strictEqual(order.customerItemsTotal, 219);
+      assert.strictEqual(order.platformMarkupTotal, 0);
+      assert.strictEqual(order.customerItemsTotal, 199);
       assert.strictEqual(order.settlementStatus, 'PENDING');
       assert.ok(order.restaurantShare > 0);
-      assert.ok(order.platformShare > 0);
       assert.strictEqual(order.restaurantShare + order.platformShare, order.grandTotal);
 
       createdDeliveryOrder = order;

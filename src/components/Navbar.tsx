@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { OrderType } from '../types';
 import { SearchModal } from './SearchModal';
+import { buildCustomerNavigationUrl } from '../utils/customerNavigation';
 
 interface NavbarProps {
   currentView: 'menu' | 'track' | string;
@@ -59,6 +60,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const {
     restaurantName,
+    restaurantSlug,
     tagline,
     logoUrl,
     selectedBranch,
@@ -284,8 +286,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                 <span className="font-bold whitespace-nowrap">
                   {qrSession.source === 'table_qr'
-                    ? `${tableNumber || qrSession.tableNumber || 'Table 1'} (Dine-In)`
-                    : 'Counter (Takeaway)'}
+                    ? `${tableNumber || qrSession.tableNumber || 'Table 1'} · Dine-In · QR Verified`
+                    : 'Counter Express · Takeaway · QR Verified'}
                 </span>
                 <Lock className="w-3 h-3 text-amber-700 shrink-0" />
               </button>
@@ -417,8 +419,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <ShieldCheck className="w-3 h-3 text-emerald-600" />
                 <span>
                   {qrSession.source === 'table_qr'
-                    ? `${tableNumber || qrSession.tableNumber || 'Table 1'} (Dine-In)`
-                    : 'Counter (Takeaway)'}
+                    ? `${tableNumber || qrSession.tableNumber || 'Table 1'} · Dine-In · QR Verified`
+                    : 'Counter Express · Takeaway · QR Verified'}
                 </span>
                 <Lock className="w-2.5 h-2.5 text-amber-700" />
               </div>
@@ -893,11 +895,12 @@ export const Navbar: React.FC<NavbarProps> = ({
         }}
         initialQuery={searchInputValue}
         onNavigateToMenu={(query) => {
-          if (query) {
-            window.location.href = `/menu?q=${encodeURIComponent(query)}`;
-          } else {
-            onNavigate('menu');
-          }
+          const slug = (restaurantSlug || 'mozz').toLowerCase();
+          const targetPath = query
+            ? `/r/${slug}/menu?q=${encodeURIComponent(query)}`
+            : `/r/${slug}/menu`;
+          const targetUrl = buildCustomerNavigationUrl(targetPath, qrSession, slug);
+          window.location.href = targetUrl;
         }}
       />
     </header>

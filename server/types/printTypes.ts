@@ -87,7 +87,12 @@ export interface PrintDevice {
   platform: string;
   appVersion: string;
   isActive: boolean;
+  last_seen_at?: string;
+  lastSeenAt?: string;
   lastHeartbeatAt: string;
+  isOnline?: boolean;
+  online?: boolean;
+  status?: 'online' | 'offline' | 'revoked' | 'inactive';
   createdAt: string;
   updatedAt: string;
 }

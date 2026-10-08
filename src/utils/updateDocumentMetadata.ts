@@ -80,6 +80,7 @@ export function updateDocumentMetadata(
     normalizedPath.startsWith('/order-confirmation') ||
     normalizedPath.startsWith('/onboarding') ||
     normalizedPath.startsWith('/login') ||
+    normalizedPath === '/menu' ||
     normalizedPath.startsWith('/table/') ||
     normalizedPath.startsWith('/counter');
 

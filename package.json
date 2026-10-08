@@ -9,6 +9,7 @@
     "prerender": "tsx scripts/prerender.ts",
     "test": "tsx scripts/verify-seo.ts && tsx scripts/test-location-coordinates.ts && tsx scripts/test-order-tracking.ts && tsx scripts/test-payment-safety.ts && tsx scripts/test-menu-integration.ts",
     "test:seo": "tsx scripts/verify-seo.ts",
+    "test:security": "tsx scripts/test-authorization-security.ts",
     "test:hardening": "tsx scripts/test-hardening.ts",
     "test:location": "tsx scripts/test-location-coordinates.ts",
     "test:tracking": "tsx scripts/test-order-tracking.ts",

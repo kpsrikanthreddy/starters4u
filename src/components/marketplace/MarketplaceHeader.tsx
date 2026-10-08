@@ -3,7 +3,6 @@ import {
   MapPin,
   UtensilsCrossed,
   Store,
-  LogIn,
   Search,
   Clock,
   Menu,
@@ -114,26 +113,13 @@ export const MarketplaceHeader: React.FC<MarketplaceHeaderProps> = ({
                 <span>Open a Restaurant</span>
               </a>
 
-              {/* Restaurant Partner Login */}
-              <a
-                href="/restaurant-admin"
-                onClick={(e) => {
-                  e.preventDefault();
-                  onNavigate('/restaurant-admin');
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-stone-200 hover:border-stone-300 text-stone-700 hover:text-stone-900 text-xs font-medium transition-colors"
-              >
-                <LogIn className="w-3.5 h-3.5 text-stone-500" />
-                <span>Restaurant Login</span>
-              </a>
-
               {/* Active Cart indicator (if customer has active items from a storefront) */}
               {itemCount > 0 && (
                 <a
-                  href={isFlagship ? '/menu' : `/r/${restaurantSlug}`}
+                  href={isFlagship ? '/r/mozz/menu' : `/r/${restaurantSlug}`}
                   onClick={(e) => {
                     e.preventDefault();
-                    onNavigate(isFlagship ? '/menu' : `/r/${restaurantSlug}`);
+                    onNavigate(isFlagship ? '/r/mozz/menu' : `/r/${restaurantSlug}`);
                   }}
                   className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs transition-colors"
                 >
@@ -147,10 +133,10 @@ export const MarketplaceHeader: React.FC<MarketplaceHeaderProps> = ({
             <div className="flex items-center gap-2 lg:hidden">
               {itemCount > 0 && (
                 <a
-                  href={isFlagship ? '/menu' : `/r/${restaurantSlug}`}
+                  href={isFlagship ? '/r/mozz/menu' : `/r/${restaurantSlug}`}
                   onClick={(e) => {
                     e.preventDefault();
-                    onNavigate(isFlagship ? '/menu' : `/r/${restaurantSlug}`);
+                    onNavigate(isFlagship ? '/r/mozz/menu' : `/r/${restaurantSlug}`);
                   }}
                   className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold"
                 >
@@ -223,19 +209,6 @@ export const MarketplaceHeader: React.FC<MarketplaceHeaderProps> = ({
                 <span className="text-[10px] uppercase font-bold text-rose-600 bg-white px-2 py-0.5 rounded-full border border-rose-200">
                   Join Free
                 </span>
-              </a>
-
-              <a
-                href="/restaurant-admin"
-                onClick={(e) => {
-                  e.preventDefault();
-                  setIsMobileMenuOpen(false);
-                  onNavigate('/restaurant-admin');
-                }}
-                className="flex items-center gap-2 py-2 px-3 text-stone-600 hover:text-stone-900 text-xs font-medium"
-              >
-                <LogIn className="w-4 h-4 text-stone-400" />
-                <span>Partner Restaurant Login</span>
               </a>
             </div>
           </div>

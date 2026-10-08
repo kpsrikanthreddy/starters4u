@@ -32,7 +32,7 @@ import { SeoRouteConfig } from './types/seoTypes';
 import { updateDocumentMetadata } from './utils/updateDocumentMetadata';
 import { CANONICAL_DOMAIN } from './config/businessInfo';
 import { FoodCategory, Order } from './types';
-import { ShoppingBag, ArrowRight, Loader2 } from 'lucide-react';
+import { ShoppingBag, ArrowRight, Loader2, AlertCircle, X } from 'lucide-react';
 import { GlobalErrorBoundary } from './components/GlobalErrorBoundary';
 import { lazyWithRetry } from './utils/chunkReloadRecovery';
 
@@ -48,6 +48,9 @@ const RazorpayCheckoutModal = lazyWithRetry(() =>
 );
 const ShapeGuideModal = lazyWithRetry(() =>
   import('./components/ShapeGuideModal').then((m) => ({ default: m.ShapeGuideModal }))
+);
+const PrintAgentApp = lazyWithRetry(() =>
+  import('./components/admin/PrintAgentApp').then((m) => ({ default: m.PrintAgentApp }))
 );
 
 interface CustomerAppProps {
@@ -66,6 +69,9 @@ const CustomerApp: React.FC<CustomerAppProps> = ({ currentPath, onNavigatePath }
     setIsCartOpen,
     isCustomerModalOpen,
     setIsCustomerModalOpen,
+    tableSessionExpired,
+    tableSessionMessage,
+    clearTableSessionExpired,
   } = useStore();
 
   const {
@@ -179,6 +185,15 @@ const CustomerApp: React.FC<CustomerAppProps> = ({ currentPath, onNavigatePath }
       );
     }
 
+    // Permanent Client Redirect from legacy /menu to canonical /r/mozz/menu (preserving query parameters)
+    if (normalizedPath === '/menu') {
+      if (typeof window !== 'undefined') {
+        const search = window.location.search || '';
+        window.location.replace(`/r/mozz/menu${search}`);
+      }
+      return null;
+    }
+
     // Dynamic Restaurant Storefront and Menu routes (/r/:slug, /r/:slug/menu)
     if (normalizedPath.startsWith('/r/')) {
       const isMenuSubroute = normalizedPath.endsWith('/menu');
@@ -265,9 +280,6 @@ const CustomerApp: React.FC<CustomerAppProps> = ({ currentPath, onNavigatePath }
           />
         );
 
-      case '/menu':
-        return <MenuPage routeConfig={routeConfig} currentPath={currentPath} />;
-
       case '/chinese-restaurant-gachibowli':
       case '/chinese-starters-gachibowli':
       case '/veg-starters-gachibowli':
@@ -341,6 +353,26 @@ const CustomerApp: React.FC<CustomerAppProps> = ({ currentPath, onNavigatePath }
     <div className="min-h-screen bg-stone-50 text-stone-800 flex flex-col font-sans selection:bg-rose-500 selection:text-white">
       {/* Restaurant suspension/inactive banner */}
       <RestaurantNoticeBanner />
+
+      {/* Table Session Expired Alert Banner */}
+      {tableSessionExpired && (
+        <div className="bg-amber-500 text-stone-900 px-4 py-2.5 text-xs sm:text-sm font-semibold border-b border-amber-600 flex items-center justify-between gap-3 shadow-xs animate-fadeIn">
+          <div className="flex items-center gap-2 max-w-5xl mx-auto flex-1">
+            <AlertCircle className="w-4 h-4 text-stone-900 shrink-0" />
+            <span>
+              {tableSessionMessage || 'Your table session is no longer active. Please scan the QR code on your table again.'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={clearTableSessionExpired}
+            className="p-1 rounded hover:bg-amber-600/30 text-stone-900 transition-colors shrink-0"
+            title="Dismiss notification"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Top Customer Navigation */}
       <Navbar
@@ -498,32 +530,54 @@ export default function App({ initialPath }: { initialPath?: string }) {
   }, []);
 
   const navigateTo = (path: string) => {
+    let target = path;
+    if (target === '/menu' || target === 'menu') {
+      target = '/r/mozz/menu';
+    } else if (target.startsWith('/menu?')) {
+      target = `/r/mozz/menu${target.slice(5)}`;
+    }
     if (typeof window !== 'undefined') {
-      window.history.pushState({}, '', path);
-      setCurrentPath(path);
+      window.history.pushState({}, '', target);
+      setCurrentPath(target);
       window.scrollTo(0, 0);
     }
   };
 
   // Determine application mode based on path and subdomain
+  const isPrintAgent = currentPath.startsWith('/print-agent');
   const isPlatformAdmin = currentPath.startsWith('/platform-admin');
   const isAdminPortal =
     currentPath.startsWith('/admin') ||
     currentHost.startsWith('admin.') ||
     currentPath.startsWith('/restaurant-admin');
 
-  // Ensure administrative and platform admin portals immediately set private noindex directives
+  // Ensure administrative, platform admin, and agent portals immediately set private noindex directives
   useEffect(() => {
-    if (isPlatformAdmin || isAdminPortal) {
+    if (isPrintAgent || isPlatformAdmin || isAdminPortal) {
       updateDocumentMetadata(undefined, currentPath, { isAdmin: true });
     }
-  }, [isPlatformAdmin, isAdminPortal, currentPath]);
+  }, [isPrintAgent, isPlatformAdmin, isAdminPortal, currentPath]);
 
   return (
     <RestaurantProvider currentPath={currentPath}>
       <StoreProvider>
         <AdminAuthProvider>
-          {isPlatformAdmin ? (
+          {isPrintAgent ? (
+            <GlobalErrorBoundary
+              fallbackTitle="Starters4U Print Agent could not load."
+              fallbackMessage="An unexpected error occurred while loading the Print Agent terminal interface. Please reload to reconnect."
+            >
+              <Suspense
+                fallback={
+                  <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">
+                    <Loader2 className="w-8 h-8 animate-spin text-rose-500" />
+                  </div>
+                }
+              >
+                <PrintAgentApp />
+              </Suspense>
+            </GlobalErrorBoundary>
+          ) : isPlatformAdmin ? (
             <GlobalErrorBoundary
               fallbackTitle="Starters4U Platform Admin could not load."
               fallbackMessage="An unexpected error occurred while loading the Platform Admin console. Reloading will fetch the latest version."

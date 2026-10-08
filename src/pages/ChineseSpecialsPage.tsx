@@ -367,7 +367,7 @@ export const ChineseSpecialsPage: React.FC<ChineseSpecialsPageProps> = ({ routeC
             <ChevronRight className="w-4 h-4 text-stone-400 group-hover:text-rose-600 group-hover:translate-x-0.5 transition" />
           </a>
           <a
-            href="/menu"
+            href="/r/mozz/menu"
             className="p-4 rounded-xl bg-white border border-stone-200 hover:border-rose-400 hover:bg-rose-50/30 text-stone-800 text-xs sm:text-sm font-semibold transition flex items-center justify-between group shadow-xs"
           >
             <span>Full Food Menu</span>

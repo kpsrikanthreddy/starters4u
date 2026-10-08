@@ -87,6 +87,14 @@ export function requireRole(allowedRoles: string[]) {
       return next();
     }
 
+    // Customers are never permitted to access admin functions
+    if (userRole === 'CUSTOMER' || userRole === 'VISITOR' || userRole === 'USER') {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Access denied: Customer accounts cannot access administrative resources.',
+      });
+    }
+
     const isOwnerOrAdmin =
       userRole === 'RESTAURANT_ADMIN' ||
       userRole === 'RESTAURANT_OWNER' ||

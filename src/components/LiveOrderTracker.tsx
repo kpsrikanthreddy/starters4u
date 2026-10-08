@@ -8,10 +8,8 @@ import {
   RefreshCw,
   MessageSquare,
   AlertCircle,
-  Calendar as CalendarIcon,
   Store,
 } from 'lucide-react';
-import { OrderCalendarView } from './OrderCalendarView';
 
 interface LiveOrderTrackerProps {
   onBackToMenu: () => void;
@@ -72,7 +70,6 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
   } = useStore();
 
   const [searchOrderId, setSearchOrderId] = useState('');
-  const [trackerView, setTrackerView] = useState<'live' | 'calendar'>('live');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [detectedAddress, setDetectedAddress] = useState<string | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
@@ -227,30 +224,15 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
     const query = searchOrderId.trim().toUpperCase();
     if (!query) return;
 
-    const matched = orders.find(
-      (o) =>
-        o.id.toUpperCase() === query ||
-        (o.orderNumber && o.orderNumber.toUpperCase() === query)
-    );
-
-    if (matched) {
-      setSessionOrder(matched);
-      setActiveOrderId(matched.id);
-      fetchOrderById(matched.id).then((ord) => {
-        if (ord) setSessionOrder(ord);
-      });
-      setSearchOrderId('');
-    } else {
-      fetchOrderById(query).then((ord) => {
-        if (ord) {
-          setSessionOrder(ord);
-          setActiveOrderId(ord.id);
-          setSearchOrderId('');
-        } else {
-          alert(`Order ${query} not found. Please check the order number.`);
-        }
-      });
-    }
+    fetchOrderById(query).then((ord) => {
+      if (ord) {
+        setSessionOrder(ord);
+        setActiveOrderId(ord.id);
+        setSearchOrderId('');
+      } else {
+        alert(`Order ${query} not found. Please check the order number.`);
+      }
+    });
   };
 
   if (!order) {
@@ -357,80 +339,42 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-      {/* Top Controls: Search Bar & Switch Orders */}
+      {/* Top Controls: Search Bar */}
       <div className="bg-white border border-slate-200 rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
         <div>
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
             <h1 className="text-lg sm:text-xl font-black text-slate-900">
-              {trackerView === 'live' ? 'Order Tracking' : 'Order History & Calendar'}
+              Live Order Tracking
             </h1>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            {trackerView === 'live'
-              ? 'Real-time kitchen order progress from MOZZ Chinese & Pizzateria'
-              : 'Browse all orders and daily summary by date on the calendar'}
+            Real-time kitchen order progress from {restaurantName || 'MOZZ Chinese & Pizzateria'}
           </p>
         </div>
 
         <div className="flex items-center gap-2 w-full sm:w-auto">
-          {/* Tracker vs Calendar View Switcher */}
-          <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200 text-xs font-bold">
-            <button
-              onClick={() => setTrackerView('live')}
-              className={`px-3 py-1.5 rounded-xl transition ${
-                trackerView === 'live'
-                  ? 'bg-rose-600 text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Order Tracking
-            </button>
-            <button
-              onClick={() => setTrackerView('calendar')}
-              className={`px-3 py-1.5 rounded-xl transition flex items-center gap-1 ${
-                trackerView === 'calendar'
-                  ? 'bg-rose-600 text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <CalendarIcon className="w-3.5 h-3.5" />
-              <span>Calendar</span>
-            </button>
-          </div>
-
           {/* Search Order ID Form */}
-          {trackerView === 'live' && (
-            <form onSubmit={handleSearch} className="flex gap-2 flex-1 sm:flex-none">
-              <input
-                type="text"
-                value={searchOrderId}
-                onChange={(e) => setSearchOrderId(e.target.value)}
-                placeholder="Search Order No (e.g. MOZZ-8901)"
-                className="bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 placeholder-slate-400 uppercase focus:outline-none focus:border-rose-500 focus:bg-white w-full sm:w-48 transition"
-              />
-              <button
-                type="submit"
-                className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition shadow-xs cursor-pointer"
-              >
-                Track
-              </button>
-            </form>
-          )}
+          <form onSubmit={handleSearch} className="flex gap-2 flex-1 sm:flex-none">
+            <input
+              type="text"
+              value={searchOrderId}
+              onChange={(e) => setSearchOrderId(e.target.value)}
+              placeholder="Search Order No (e.g. MOZZ-8901)"
+              className="bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 placeholder-slate-400 uppercase focus:outline-none focus:border-rose-500 focus:bg-white w-full sm:w-48 transition"
+            />
+            <button
+              type="submit"
+              className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition shadow-xs cursor-pointer"
+            >
+              Track
+            </button>
+          </form>
         </div>
       </div>
 
-      {trackerView === 'calendar' ? (
-        <OrderCalendarView
-          orders={orders}
-          onSelectOrder={(ord) => {
-            setActiveOrderId(ord.id);
-            setTrackerView('live');
-          }}
-        />
-      ) : (
-        /* Main Tracking Grid */
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      {/* Main Tracking Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Left 7 Cols: Interactive Map & Genuine Timeline */}
           <div className="lg:col-span-7 space-y-6">
             {/* Google Maps Order Tracking Card */}
@@ -500,7 +444,7 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
                   ✓
                 </div>
                 <h3 className="text-base sm:text-lg font-bold text-emerald-900">
-                  Order {displayOrderNumber} completed successfully. Thank you for ordering from MOZZ!
+                  Order delivered successfully. Thank you for ordering from MOZZ!
                 </h3>
                 <p className="text-xs text-emerald-700 font-medium">
                   Your food was delivered fresh & hot. We hope you enjoyed your meal!
@@ -528,7 +472,7 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
               <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-rose-600">
-                    Kitchen & Order Timeline
+                    Kitchen & Order Progress Timeline
                   </h3>
                   <span className="text-xs font-black text-rose-700 whitespace-nowrap">
                     Order {displayOrderNumber}
@@ -785,7 +729,6 @@ export const LiveOrderTracker: React.FC<LiveOrderTrackerProps> = ({ onBackToMenu
             </div>
           </div>
         </div>
-      )}
-    </div>
-  );
-};
+      </div>
+    );
+  };
