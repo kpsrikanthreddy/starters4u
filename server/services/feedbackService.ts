@@ -1,6 +1,12 @@
 import crypto from 'crypto';
-import { query, inMemoryDb, isPostgresRunning } from '../db.js';
+import { query, inMemoryDb, isPostgresRunning, isPostgresConfigured } from '../db.js';
 import { getRestaurantSettings } from './tenantService.js';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isPgActive(): boolean {
+  return isPostgresRunning() || isPostgresConfigured() || process.env.NODE_ENV === 'production';
+}
 
 export const WHATSAPP_APPROVED_FEEDBACK_TEMPLATE = 'glossylooks_customer_feedback';
 
@@ -66,7 +72,7 @@ export async function scheduleOrderFeedback(
   }
 
   if (!rawPhone && order.customer_id) {
-    if (isPostgresRunning()) {
+    if (isPgActive()) {
       try {
         const custRes = await query(`SELECT phone FROM customers WHERE id = $1 LIMIT 1`, [order.customer_id]);
         if (custRes.rows[0]?.phone) {
@@ -90,7 +96,7 @@ export async function scheduleOrderFeedback(
   const scheduledAt = new Date(completionTimestamp.getTime() + 2 * 60 * 60 * 1000);
   const templateName = process.env.WHATSAPP_FEEDBACK_TEMPLATE || WHATSAPP_APPROVED_FEEDBACK_TEMPLATE;
 
-  if (isPostgresRunning()) {
+  if (isPgActive()) {
     try {
       const res = await query(
         `INSERT INTO customer_feedback_requests (
@@ -147,21 +153,50 @@ export async function scheduleOrderFeedback(
 /**
  * Get feedback request status for a specific order.
  */
-export async function getFeedbackRequestForOrder(orderId: string): Promise<FeedbackRequestRecord | null> {
-  if (isPostgresRunning()) {
+export async function getFeedbackRequestForOrder(
+  orderId: string,
+  tenantRestaurantId?: string
+): Promise<FeedbackRequestRecord | null> {
+  const isPg = isPgActive();
+  const rawOrderId = String(orderId || '').trim();
+  const isUuid = UUID_REGEX.test(rawOrderId);
+
+  if (isPg) {
     try {
-      const res = await query(
-        `SELECT * FROM customer_feedback_requests WHERE order_id = $1 LIMIT 1`,
-        [orderId]
-      );
-      return res.rows[0] || null;
+      if (isUuid) {
+        if (tenantRestaurantId) {
+          const res = await query(
+            `SELECT * FROM customer_feedback_requests WHERE order_id = $1 AND restaurant_id = $2 LIMIT 1`,
+            [rawOrderId, tenantRestaurantId]
+          );
+          return res.rows[0] || null;
+        } else {
+          const res = await query(
+            `SELECT * FROM customer_feedback_requests WHERE order_id = $1 LIMIT 1`,
+            [rawOrderId]
+          );
+          return res.rows[0] || null;
+        }
+      } else {
+        // If caller passed order_number, look up via order relation
+        const res = await query(
+          `SELECT cfr.* FROM customer_feedback_requests cfr
+           JOIN orders o ON cfr.order_id = o.id
+           WHERE o.order_number = $1 ${tenantRestaurantId ? 'AND (cfr.restaurant_id = $2 OR o.restaurant_id = $2)' : ''} LIMIT 1`,
+          tenantRestaurantId ? [rawOrderId, tenantRestaurantId] : [rawOrderId]
+        );
+        return res.rows[0] || null;
+      }
     } catch (err: any) {
       console.error('[FeedbackService] Error fetching feedback status from DB:', err.message);
     }
   }
 
   const inMem = inMemoryDb.customer_feedback_requests || [];
-  return inMem.find((r: any) => r.order_id === orderId) || null;
+  return inMem.find((r: any) => {
+    const match = r.order_id === rawOrderId;
+    return tenantRestaurantId ? match && r.restaurant_id === tenantRestaurantId : match;
+  }) || null;
 }
 
 /**
@@ -171,11 +206,14 @@ export async function getFeedbackRequestsForOrders(orderIds: string[]): Promise<
   const result: Record<string, FeedbackRequestRecord> = {};
   if (!orderIds || orderIds.length === 0) return result;
 
-  if (isPostgresRunning()) {
+  const validUuidOrderIds = orderIds.filter((id) => id && UUID_REGEX.test(String(id).trim()));
+  if (validUuidOrderIds.length === 0) return result;
+
+  if (isPgActive()) {
     try {
       const res = await query(
         `SELECT * FROM customer_feedback_requests WHERE order_id = ANY($1::uuid[])`,
-        [orderIds]
+        [validUuidOrderIds]
       );
       for (const row of res.rows) {
         result[row.order_id] = row;
@@ -341,7 +379,8 @@ function buildApprovedTemplateComponents(
  */
 export async function sendOrderFeedback(
   orderId: string,
-  isManual = false
+  isManual = false,
+  tenantRestaurantId?: string
 ): Promise<{
   success: boolean;
   status: 'SENT' | 'FAILED' | 'SKIPPED';
@@ -355,23 +394,64 @@ export async function sendOrderFeedback(
     return { success: false, status: 'FAILED', error: 'Missing orderId' };
   }
 
-  // 1. Fetch Order and verify eligibility
+  const rawOrderId = String(orderId).trim();
+  const isUuid = UUID_REGEX.test(rawOrderId);
+  const isPg = isPgActive();
+
+  // 1. Fetch Order and verify eligibility with tenant scoping
   let orderRow: any = null;
-  if (isPostgresRunning()) {
+  if (isPg) {
     try {
-      const res = await query(`SELECT * FROM orders WHERE id = $1 LIMIT 1`, [orderId]);
-      orderRow = res.rows[0];
+      if (isUuid) {
+        // Preferred: lookup by orders.id UUID with tenant scoping
+        if (tenantRestaurantId) {
+          const res = await query(
+            `SELECT * FROM orders WHERE id = $1 AND restaurant_id = $2 LIMIT 1`,
+            [rawOrderId, tenantRestaurantId]
+          );
+          orderRow = res.rows[0];
+        } else {
+          const res = await query(`SELECT * FROM orders WHERE id = $1 LIMIT 1`, [rawOrderId]);
+          orderRow = res.rows[0];
+        }
+      } else {
+        // Normalization if caller sent display order_number (e.g. MOZZ-9206):
+        // Do NOT query orders.id with a display order number to avoid Postgres UUID casting errors!
+        if (tenantRestaurantId) {
+          const res = await query(
+            `SELECT * FROM orders WHERE order_number = $1 AND restaurant_id = $2 LIMIT 1`,
+            [rawOrderId, tenantRestaurantId]
+          );
+          orderRow = res.rows[0];
+        } else {
+          const res = await query(`SELECT * FROM orders WHERE order_number = $1 LIMIT 1`, [rawOrderId]);
+          orderRow = res.rows[0];
+        }
+      }
     } catch (err: any) {
-      console.error('[FeedbackService] Error fetching order for feedback:', err.message);
+      console.error('[FeedbackService] Error fetching order for feedback from DB:', err.message);
     }
   }
-  if (!orderRow) {
-    orderRow = inMemoryDb.orders.find((o: any) => o.id === orderId);
+
+  // Local fallback only if PostgreSQL is not active/configured
+  if (!orderRow && !isPg) {
+    orderRow = inMemoryDb.orders.find((o: any) => {
+      const match = o.id === rawOrderId || o.order_number === rawOrderId;
+      return tenantRestaurantId ? match && o.restaurant_id === tenantRestaurantId : match;
+    });
   }
+
+  // Safe server-side diagnostic logging (no WhatsApp tokens, service keys, passwords)
+  console.info(
+    `[WhatsApp Feedback Diagnostic] Received orderId: ${rawOrderId} | Authenticated restaurant_id: ${tenantRestaurantId || orderRow?.restaurant_id || 'N/A'} | Order found: ${Boolean(orderRow)}`
+  );
 
   if (!orderRow) {
     return { success: false, status: 'FAILED', error: 'Order not found' };
   }
+
+  // Normalize resolved order UUID for customer_feedback_requests relation
+  const resolvedOrderId = orderRow.id;
 
   const statusLower = (orderRow.status || '').toLowerCase();
   if (statusLower !== 'delivered' && statusLower !== 'completed') {
@@ -397,7 +477,7 @@ export async function sendOrderFeedback(
 
   // Fallback to customer table if customer_id is present
   if ((!rawPhone || !customerName) && orderRow.customer_id) {
-    if (isPostgresRunning()) {
+    if (isPg) {
       try {
         const custRes = await query(`SELECT name, phone FROM customers WHERE id = $1 LIMIT 1`, [orderRow.customer_id]);
         if (custRes.rows[0]) {
@@ -434,10 +514,10 @@ export async function sendOrderFeedback(
     }
   } catch {}
 
-  const orderNumber = orderRow.order_number || `ORD-${orderId.slice(0, 6).toUpperCase()}`;
+  const orderNumber = orderRow.order_number || `ORD-${resolvedOrderId.slice(0, 6).toUpperCase()}`;
 
   // 3. Duplicate Protection Check
-  const existingFeedback = await getFeedbackRequestForOrder(orderId);
+  const existingFeedback = await getFeedbackRequestForOrder(resolvedOrderId, restaurantId);
   if (existingFeedback && existingFeedback.status === 'SENT') {
     return {
       success: true,
@@ -452,7 +532,7 @@ export async function sendOrderFeedback(
   const templateName = process.env.WHATSAPP_FEEDBACK_TEMPLATE || WHATSAPP_APPROVED_FEEDBACK_TEMPLATE;
   let requestId = existingFeedback?.id || crypto.randomUUID();
 
-  if (isPostgresRunning()) {
+  if (isPg) {
     try {
       const upsert = await query(
         `INSERT INTO customer_feedback_requests (
@@ -460,7 +540,7 @@ export async function sendOrderFeedback(
         ) VALUES ($1, $2, $3, $4, $5, NOW(), 'SENDING')
         ON CONFLICT (order_id) DO UPDATE SET status = 'SENDING', template_name = $5
         RETURNING *`,
-        [requestId, restaurantId, orderId, formattedPhone, templateName]
+        [requestId, restaurantId, resolvedOrderId, formattedPhone, templateName]
       );
       if (upsert.rows[0]) {
         requestId = upsert.rows[0].id;
@@ -470,7 +550,7 @@ export async function sendOrderFeedback(
     }
   } else {
     if (!inMemoryDb.customer_feedback_requests) inMemoryDb.customer_feedback_requests = [];
-    const idx = inMemoryDb.customer_feedback_requests.findIndex((r: any) => r.order_id === orderId);
+    const idx = inMemoryDb.customer_feedback_requests.findIndex((r: any) => r.order_id === resolvedOrderId);
     if (idx >= 0) {
       inMemoryDb.customer_feedback_requests[idx].status = 'SENDING';
       inMemoryDb.customer_feedback_requests[idx].template_name = templateName;
@@ -478,7 +558,7 @@ export async function sendOrderFeedback(
       inMemoryDb.customer_feedback_requests.push({
         id: requestId,
         restaurant_id: restaurantId,
-        order_id: orderId,
+        order_id: resolvedOrderId,
         customer_phone: formattedPhone,
         template_name: templateName,
         scheduled_at: new Date().toISOString(),
@@ -607,7 +687,7 @@ export async function sendOrderFeedback(
 
     // 5. Only set to SENT after Meta successfully accepts the message and returns wamid
     // Note: Do NOT mark API acceptance as DELIVERED. SENT means Meta accepted the request.
-    if (isPostgresRunning()) {
+    if (isPg) {
       await query(
         `UPDATE customer_feedback_requests
          SET status = 'SENT',
@@ -616,10 +696,10 @@ export async function sendOrderFeedback(
              whatsapp_message_id = $2,
              error_message = NULL
          WHERE order_id = $3`,
-        [templateName, whatsappMessageId, orderId]
+        [templateName, whatsappMessageId, resolvedOrderId]
       );
     } else {
-      const rec = (inMemoryDb.customer_feedback_requests || []).find((r: any) => r.order_id === orderId);
+      const rec = (inMemoryDb.customer_feedback_requests || []).find((r: any) => r.order_id === resolvedOrderId);
       if (rec) {
         rec.status = 'SENT';
         rec.template_name = templateName;
@@ -640,17 +720,17 @@ export async function sendOrderFeedback(
     console.error('[FeedbackService] WhatsApp send failed:', err.message);
 
     // Update Status to FAILED
-    if (isPostgresRunning()) {
+    if (isPg) {
       await query(
         `UPDATE customer_feedback_requests
          SET status = 'FAILED',
              template_name = $1,
              error_message = $2
          WHERE order_id = $3`,
-        [templateName, err.message, orderId]
+        [templateName, err.message, resolvedOrderId]
       );
     } else {
-      const rec = (inMemoryDb.customer_feedback_requests || []).find((r: any) => r.order_id === orderId);
+      const rec = (inMemoryDb.customer_feedback_requests || []).find((r: any) => r.order_id === resolvedOrderId);
       if (rec) {
         rec.status = 'FAILED';
         rec.template_name = templateName;
@@ -683,7 +763,7 @@ export async function updateFeedbackStatusByMessageId(
     return null;
   }
 
-  if (isPostgresRunning()) {
+  if (isPgActive()) {
     try {
       const res = await query(
         `UPDATE customer_feedback_requests
@@ -717,7 +797,7 @@ export async function updateFeedbackStatusByMessageId(
 export async function processDueFeedbackRequests(): Promise<{ processed: number; succeeded: number; failed: number }> {
   let dueOrderIds: string[] = [];
 
-  if (isPostgresRunning()) {
+  if (isPgActive()) {
     try {
       const res = await query(
         `SELECT order_id FROM customer_feedback_requests

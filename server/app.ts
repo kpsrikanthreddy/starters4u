@@ -6,7 +6,7 @@ import path from 'path';
 import cookieParser from 'cookie-parser';
 import Razorpay from 'razorpay';
 import dotenv from 'dotenv';
-import { initializeDatabase, isPostgresRunning, inMemoryDb, query } from './db.js';
+import { initializeDatabase, isPostgresRunning, isPostgresConfigured, inMemoryDb, query } from './db.js';
 import * as menuService from './services/menuService.js';
 import * as orderService from './services/orderService.js';
 import * as customerService from './services/customerService.js';
@@ -275,23 +275,27 @@ export function createApp(): express.Application {
   // Restaurant A can NEVER access Restaurant B data.
   // ==========================================================
   app.get('/api/admin/orders', requireAuth, requireRestaurantTenant, async (req, res) => {
-    console.log('[DEBUG /api/admin/orders] ENTERED HANDLER', {
-      user: req.user,
-      tenant: req.tenant,
-      query: req.query,
-    });
-    try {
-      const restaurantId = req.tenant?.restaurantId || req.user?.restaurantId;
-      const requestedBranchId = (req.query.branchId as string) || (req.query.branch_id as string);
-      const branchId = requestedBranchId || (req.tenant?.hasAllBranchAccess ? undefined : req.user?.branchId);
-      const status = (req.query.status as string) || 'all';
-      const limit = parseInt((req.query.limit as string) || '50', 10);
+    const restaurantId = req.tenant?.restaurantId || req.user?.restaurantId;
+    if (!restaurantId) {
+      return res.status(400).json({ error: 'Restaurant tenant context missing' });
+    }
 
+    const requestedBranchId = (req.query.branchId as string) || (req.query.branch_id as string);
+    const branchId = requestedBranchId || (req.tenant?.hasAllBranchAccess ? undefined : req.user?.branchId);
+    const status = (req.query.status as string) || 'all';
+    const limit = parseInt((req.query.limit as string) || '50', 10);
+
+    try {
       const orders = await orderService.getOrders(restaurantId, branchId, status, limit);
+
+      const dbMode = isPostgresRunning() ? 'PostgreSQL/Supabase' : (isPostgresConfigured() ? 'PostgreSQL/Supabase' : 'in-memory');
+      console.info(`[Orders Diagnostic] Mode: ${dbMode} | Restaurant ID: ${restaurantId} | Orders Count: ${orders.length}`);
+
       res.json(orders);
     } catch (err: any) {
-      console.error('[Admin API] Error fetching tenant orders:', err);
-      res.status(500).json({ error: 'Failed to fetch orders', details: err.message });
+      const dbMode = isPostgresRunning() ? 'PostgreSQL/Supabase' : (isPostgresConfigured() ? 'PostgreSQL/Supabase' : 'in-memory');
+      console.error(`[Orders Diagnostic Error] Mode: ${dbMode} | Restaurant ID: ${restaurantId} | Error: ${err.message}`);
+      res.status(503).json({ error: 'Unable to load orders. Please try again.', details: err.message });
     }
   });
 
@@ -2629,14 +2633,20 @@ export function createApp(): express.Application {
 
   // Manual WhatsApp Feedback Dispatch (Requires admin/staff authorization)
   app.post(
-    ['/api/admin/orders/:id/feedback', '/api/orders/:id/feedback'],
+    ['/api/whatsapp/feedback', '/api/admin/orders/:id/feedback', '/api/orders/:id/feedback'],
     requireAuth,
     requireRestaurantTenant,
     requireRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER', 'CASHIER', 'STAFF']),
     async (req, res) => {
       try {
-        const orderId = req.params.id;
-        const result = await sendOrderFeedback(orderId, true);
+        const receivedOrderId = (req.body?.orderId || req.body?.id || req.params?.id || req.query?.orderId) as string;
+        const restaurantId = req.tenant?.restaurantId || req.user?.restaurantId;
+
+        if (!receivedOrderId) {
+          return res.status(400).json({ error: 'Missing orderId' });
+        }
+
+        const result = await sendOrderFeedback(String(receivedOrderId).trim(), true, restaurantId);
         if (!result.success && result.status === 'FAILED') {
           return res.status(400).json({ error: result.error || 'Failed to send WhatsApp feedback' });
         }
@@ -2649,12 +2659,17 @@ export function createApp(): express.Application {
 
   // Query Feedback Request Status for an Order
   app.get(
-    ['/api/admin/orders/:id/feedback', '/api/orders/:id/feedback'],
+    ['/api/whatsapp/feedback/:id', '/api/whatsapp/feedback', '/api/admin/orders/:id/feedback', '/api/orders/:id/feedback'],
     requireAuth,
     requireRestaurantTenant,
     async (req, res) => {
       try {
-        const record = await getFeedbackRequestForOrder(req.params.id);
+        const orderId = req.params?.id || (req.query?.orderId as string) || (req.query?.id as string);
+        const restaurantId = req.tenant?.restaurantId || req.user?.restaurantId;
+        if (!orderId) {
+          return res.status(400).json({ error: 'Missing orderId' });
+        }
+        const record = await getFeedbackRequestForOrder(String(orderId).trim(), restaurantId);
         res.json({ feedbackRequest: record });
       } catch (err: any) {
         res.status(500).json({ error: 'Failed to fetch feedback request status' });

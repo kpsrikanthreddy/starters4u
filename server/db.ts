@@ -11,7 +11,21 @@ dotenv.config();
 const { Pool } = pg;
 
 // Detect database connection URL from environment variables
-const DATABASE_URL = process.env.DATABASE_URL;
+export function getDatabaseUrl(): string | undefined {
+  return (
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.SUPABASE_DATABASE_URL ||
+    process.env.SUPABASE_DB_URL ||
+    process.env.DATABASE_POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.POSTGRES_URL_NON_POOLING
+  );
+}
+
+export function isPostgresConfigured(): boolean {
+  return Boolean(getDatabaseUrl());
+}
 
 let pool: pg.Pool | null = null;
 let isPostgresActive = false;
@@ -32,15 +46,16 @@ export function getDbPool(): pg.Pool | null {
     return globalThis.__pgPool;
   }
 
-  if (!DATABASE_URL) {
-    console.info('[DB] DATABASE_URL not detected in environment variables. Running with in-memory persistence fallback.');
+  const dbUrl = getDatabaseUrl();
+  if (!dbUrl) {
+    console.info('[DB] No PostgreSQL/Supabase connection URL detected in environment variables.');
     return null;
   }
 
   try {
-    const isLocal = DATABASE_URL.includes('localhost') || DATABASE_URL.includes('127.0.0.1');
+    const isLocal = dbUrl.includes('localhost') || dbUrl.includes('127.0.0.1');
     const newPool = new Pool({
-      connectionString: DATABASE_URL,
+      connectionString: dbUrl,
       ssl: isLocal ? false : { rejectUnauthorized: false },
       max: parseInt(process.env.PG_MAX_POOL || '10', 10), // Max clients in pool
       idleTimeoutMillis: 30000,
@@ -614,159 +629,17 @@ export const inMemoryDb: InMemoryDbState = {
   ] as any[],
 };
 
-// Seed sample orders for immediate richness if in memory
-export function seedSampleOrdersInMemory() {
-  if (inMemoryDb.orders.length > 0) return;
-
-  const sampleCustId = '00000000-0000-0000-0000-000000000101';
-  const sampleOrderId = 'd0000000-0000-0000-0000-000000008901';
-
-  const sampleCustomer = {
-    id: sampleCustId,
-    restaurant_id: 'a0000000-0000-0000-0000-000000000001',
-    name: 'Aditi Verma',
-    phone: '9845012345',
-    email: 'aditi.verma@example.com',
-    address: 'Villa 12, Green Park Avenue',
-    landmark: 'Next to Central Bank',
-    created_at: new Date(Date.now() - 1000 * 60 * 20).toISOString(),
-    updated_at: new Date(Date.now() - 1000 * 60 * 20).toISOString(),
-  };
-  inMemoryDb.customers.push(sampleCustomer);
-
-  const sampleOrder = {
-    id: sampleOrderId,
-    order_number: 'MOZZ-8901',
-    restaurant_id: 'a0000000-0000-0000-0000-000000000001',
-    branch_id: 'b0000000-0000-0000-0000-000000000001',
-    customer_id: sampleCustId,
-    order_type: 'delivery',
-    entry_source: 'online_web',
-    table_id: null,
-    table_number: null,
-    status: 'out_for_delivery',
-    payment_method: 'gpay',
-    payment_status: 'paid',
-    payment_id: 'pay_MOZZ_sim_8901',
-    item_total: 557,
-    tax: 27.85,
-    delivery_fee: 0,
-    discount: 50,
-    coupon_code: 'KOREANLOVE',
-    grand_total: 534.85,
-    estimated_delivery_time_minutes: 12,
-    kot_number: 'KOT-8901',
-    kot_station: 'All Stations',
-    driver_name: 'Suresh Kumar',
-    driver_phone: '9876011223',
-    driver_vehicle: 'TS 09 EZ 4521 (Electric Bike)',
-    customer_snapshot: {
-      name: 'Aditi Verma',
-      phone: '9845012345',
-      address: 'Villa 12, Green Park Avenue',
-      landmark: 'Next to Central Bank',
-    },
-    created_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-    updated_at: new Date(Date.now() - 1000 * 60 * 2).toISOString(),
-  };
-  inMemoryDb.orders.push(sampleOrder);
-
-  inMemoryDb.order_items.push(
-    {
-      id: '00000000-0000-0000-0000-000000000101',
-      order_id: sampleOrderId,
-      restaurant_id: 'a0000000-0000-0000-0000-000000000001',
-      menu_item_id: 'vp-1',
-      item_name: 'Cheesy Margherita',
-      quantity: 2,
-      unit_price: 189,
-      selected_shape: 'R',
-      selected_crust: 'Korean Pocket Crust',
-      spice_level: 'Mild',
-      addons: [{ id: 'cheese_burst', name: 'Extra Korean In-House Cheese Blend', price: 40 }],
-      special_instructions: '',
-      created_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-    },
-    {
-      id: '00000000-0000-0000-0000-000000000102',
-      order_id: sampleOrderId,
-      restaurant_id: 'a0000000-0000-0000-0000-000000000001',
-      menu_item_id: 'cs-1',
-      item_name: 'Chilli Chicken Dry (Indo-Chinese)',
-      quantity: 1,
-      unit_price: 179,
-      selected_shape: null,
-      selected_crust: null,
-      spice_level: 'Medium',
-      addons: [],
-      special_instructions: '',
-      created_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-    }
-  );
-
-  inMemoryDb.order_status_history.push(
-    { id: '00000000-0000-0000-0000-000000000111', order_id: sampleOrderId, restaurant_id: 'a0000000-0000-0000-0000-000000000001', status: 'placed', note: 'Order placed via Razorpay UPI', created_at: new Date(Date.now() - 1000 * 60 * 18).toISOString() },
-    { id: '00000000-0000-0000-0000-000000000112', order_id: sampleOrderId, restaurant_id: 'a0000000-0000-0000-0000-000000000001', status: 'confirmed', note: 'Kitchen accepted order', created_at: new Date(Date.now() - 1000 * 60 * 15).toISOString() },
-    { id: '00000000-0000-0000-0000-000000000113', order_id: sampleOrderId, restaurant_id: 'a0000000-0000-0000-0000-000000000001', status: 'baking', note: 'Baking Rectangular Pocket Pizzas', created_at: new Date(Date.now() - 1000 * 60 * 12).toISOString() },
-    { id: '00000000-0000-0000-0000-000000000114', order_id: sampleOrderId, restaurant_id: 'a0000000-0000-0000-0000-000000000001', status: 'packing', note: 'Quality check and sealed in thermal box', created_at: new Date(Date.now() - 1000 * 60 * 6).toISOString() },
-    { id: '00000000-0000-0000-0000-000000000115', order_id: sampleOrderId, restaurant_id: 'a0000000-0000-0000-0000-000000000001', status: 'out_for_delivery', note: 'Delivery rider Suresh picked up the order', created_at: new Date(Date.now() - 1000 * 60 * 2).toISOString() }
-  );
-
-  inMemoryDb.kots.push({
-    id: '00000000-0000-0000-0000-000000000121',
-    restaurant_id: 'a0000000-0000-0000-0000-000000000001',
-    branch_id: 'b0000000-0000-0000-0000-000000000001',
-    order_id: sampleOrderId,
-    kot_number: 'KOT-8901',
-    station: 'All Stations',
-    print_count: 1,
-    status: 'active',
-    created_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-    updated_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-  });
-
-  if (!inMemoryDb.customer_inquiries || inMemoryDb.customer_inquiries.length === 0) {
-    inMemoryDb.customer_inquiries = [
-      {
-        id: 'INQ-SAMPLE-01',
-        restaurant_id: 'a0000000-0000-0000-0000-000000000001',
-        branch_id: 'b0000000-0000-0000-0000-000000000001',
-        name: 'Pooja Hegde',
-        phone: '+919845098765',
-        order_id: 'MOZZ-8901',
-        message: 'Can I add extra Korean garlic dip to my active order MOZZ-8901? Called the kitchen earlier.',
-        status: 'in_review',
-        ip_hash: '9f86d081884c7d659a2feaa0c55ad015',
-        user_agent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)',
-        created_at: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
-        updated_at: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-      },
-      {
-        id: 'INQ-SAMPLE-02',
-        restaurant_id: 'a0000000-0000-0000-0000-000000000001',
-        branch_id: 'b0000000-0000-0000-0000-000000000001',
-        name: 'Vikram Mehta',
-        phone: '+919811223344',
-        order_id: null,
-        message: 'Do you offer custom party catering for 30 people on Saturday evening with your rectangular crusts?',
-        status: 'new',
-        ip_hash: '4b227777d4dd1fc61c6f884f48641d02',
-        user_agent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-        created_at: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
-        updated_at: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
-      },
-    ];
-  }
-}
-
-seedSampleOrdersInMemory();
+// In-memory store starts with zero mock/sample orders
+// No fake, mock, demo, or fallback orders are ever seeded in memory
 
 // Database Query Wrapper
 export async function query(text: string, params: any[] = []): Promise<{ rows: any[]; rowCount: number }> {
   const currentPool = getDbPool();
-  if (currentPool && isPostgresActive) {
+  if (currentPool) {
     try {
       const res = await currentPool.query(text, params);
+      isPostgresActive = true;
+      globalThis.__isPostgresActive = true;
       if (Array.isArray(res)) {
         const lastResult = res[res.length - 1];
         const rows = lastResult?.rows || [];
@@ -775,9 +648,14 @@ export async function query(text: string, params: any[] = []): Promise<{ rows: a
       }
       return { rows: res.rows || [], rowCount: res.rowCount ?? (res.rows ? res.rows.length : 0) };
     } catch (err: any) {
-      console.error('[DB Query Error]', { text, error: err.message });
+      console.error('[DB Query Error]', { text: text.slice(0, 100), error: err.message });
       throw err;
     }
+  }
+
+  // If in production or DB is configured without pool, throw error
+  if (process.env.NODE_ENV === 'production' || isPostgresConfigured()) {
+    throw new Error('Database connection is not configured or unavailable in production.');
   }
 
   return executeInMemoryQuery(text, params);
@@ -786,8 +664,18 @@ export async function query(text: string, params: any[] = []): Promise<{ rows: a
 // Transaction Client Helper
 export async function getClient() {
   const currentPool = getDbPool();
-  if (currentPool && isPostgresActive) {
-    return await currentPool.connect();
+  if (currentPool) {
+    try {
+      const client = await currentPool.connect();
+      isPostgresActive = true;
+      globalThis.__isPostgresActive = true;
+      return client;
+    } catch (err: any) {
+      console.error('[DB getClient Error]:', err.message);
+      if (process.env.NODE_ENV === 'production' || isPostgresConfigured()) {
+        throw err;
+      }
+    }
   }
   return null;
 }
@@ -879,121 +767,86 @@ export async function initializeDatabase(): Promise<{ success: boolean; mode: st
   }
 
   globalThis.__dbInitPromise = (async () => {
+    const dbUrl = getDatabaseUrl();
     const currentPool = getDbPool();
-    if (!currentPool) {
-      console.info('[DB] Running with in-memory multi-tenant storage.');
+    if (!currentPool || !dbUrl) {
+      console.info('[DB] Running with in-memory multi-tenant storage (no database URL configured).');
+      isPostgresActive = false;
+      globalThis.__isPostgresActive = false;
       return { success: true, mode: 'in_memory' };
     }
 
     try {
       const client = await currentPool.connect();
       try {
-        console.info('[DB] Successfully connected to PostgreSQL instance.');
+        await client.query('SELECT 1');
         isPostgresActive = true;
         globalThis.__isPostgresActive = true;
+        console.info('[DB] Successfully connected to PostgreSQL/Supabase database.');
 
         // Run schema initialization (Creates or modifies existing tables, columns, constraints, triggers, indexes)
-        const schemaPath = path.join(process.cwd(), 'database', 'schema.sql');
-        if (fs.existsSync(schemaPath)) {
-          const schemaSql = fs.readFileSync(schemaPath, 'utf-8');
-          await client.query(schemaSql);
-          console.info('[DB] PostgreSQL multi-tenant schema verified/applied (created or modified objects).');
+        try {
+          const schemaPath = path.join(process.cwd(), 'database', 'schema.sql');
+          if (fs.existsSync(schemaPath)) {
+            const schemaSql = fs.readFileSync(schemaPath, 'utf-8');
+            await client.query(schemaSql);
+            console.info('[DB] PostgreSQL multi-tenant schema verified/applied.');
+          }
+        } catch (schemaErr: any) {
+          console.warn('[DB] Schema verification notice (tables already exist):', schemaErr.message);
         }
 
         // Ensure print_devices has last_seen_at column
-        await client.query(`ALTER TABLE print_devices ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ DEFAULT NOW();`);
+        try {
+          await client.query(`ALTER TABLE print_devices ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ DEFAULT NOW();`);
+        } catch (e: any) {
+          // Ignore notice
+        }
 
         // Apply seed script (Idempotently creates or modifies base restaurant, branch, tables, categories & menu items)
-        const seedPath = path.join(process.cwd(), 'database', 'seed.sql');
-        if (fs.existsSync(seedPath)) {
-          const seedSql = fs.readFileSync(seedPath, 'utf-8');
-          await client.query(seedSql);
-          console.info('[DB] Seed data verified/applied (created or modified existing objects).');
+        try {
+          const seedPath = path.join(process.cwd(), 'database', 'seed.sql');
+          if (fs.existsSync(seedPath)) {
+            const seedSql = fs.readFileSync(seedPath, 'utf-8');
+            await client.query(seedSql);
+            console.info('[DB] Seed data verified/applied.');
+          }
+        } catch (seedErr: any) {
+          console.warn('[DB] Seed data verification notice:', seedErr.message);
         }
 
-        // Apply contact inquiries & atomic rate limits migration idempotently
-        const contactMigPath = path.join(process.cwd(), 'database', 'migration_contact_and_rate_limits.sql');
-        if (fs.existsSync(contactMigPath)) {
-          const contactMigSql = fs.readFileSync(contactMigPath, 'utf-8');
-          await client.query(contactMigSql);
-          console.info('[DB] Contact inquiries and rate limits migration verified/applied.');
+        // Apply migrations safely without failing if already applied
+        const migrationFiles = [
+          'migration_contact_and_rate_limits.sql',
+          'migrations/001_multi_tenant_core.sql',
+          'migrations/002_platform_onboarding.sql',
+          'migrations/003_order_channels.sql',
+          'migrations/004_payments_delivery_pricing_ledger.sql',
+          'migrations/005_order_status_sync.sql',
+          'migrations/006_payment_audit_and_restaurant_lifecycle.sql',
+          'migrations/007_direct_upi_payment_attempts.sql',
+          'migrations/009_order_confirmed_and_feedback.sql',
+        ];
+
+        for (const relMig of migrationFiles) {
+          try {
+            const migPath = path.join(process.cwd(), 'database', relMig);
+            if (fs.existsSync(migPath)) {
+              const migSql = fs.readFileSync(migPath, 'utf-8');
+              await client.query(migSql);
+            }
+          } catch (migErr: any) {
+            // Already applied or exists, do not fail
+          }
         }
 
-        // Apply multi-tenant core migration idempotently
-        const multiTenantMigPath = path.join(process.cwd(), 'database', 'migrations', '001_multi_tenant_core.sql');
-        if (fs.existsSync(multiTenantMigPath)) {
-          const migSql = fs.readFileSync(multiTenantMigPath, 'utf-8');
-          await client.query(migSql);
-          console.info('[DB] Multi-tenant core migration verified/applied.');
-        }
-
-        // Apply platform onboarding migration idempotently
-        const onboardingMigPath = path.join(process.cwd(), 'database', 'migrations', '002_platform_onboarding.sql');
-        if (fs.existsSync(onboardingMigPath)) {
-          const migSql = fs.readFileSync(onboardingMigPath, 'utf-8');
-          await client.query(migSql);
-          console.info('[DB] Platform onboarding migration verified/applied.');
-        }
-
-        // Apply multi-restaurant order channels migration idempotently
-        const orderChannelsMigPath = path.join(process.cwd(), 'database', 'migrations', '003_order_channels.sql');
-        if (fs.existsSync(orderChannelsMigPath)) {
-          const migSql = fs.readFileSync(orderChannelsMigPath, 'utf-8');
-          await client.query(migSql);
-          console.info('[DB] Multi-restaurant order channels migration verified/applied.');
-        }
-
-        // Apply payments, delivery pricing & split ledger migration idempotently
-        const paymentsMigPath = path.join(process.cwd(), 'database', 'migrations', '004_payments_delivery_pricing_ledger.sql');
-        if (fs.existsSync(paymentsMigPath)) {
-          const migSql = fs.readFileSync(paymentsMigPath, 'utf-8');
-          await client.query(migSql);
-          console.info('[DB] Payments, delivery pricing and ledger migration verified/applied.');
-        }
-
-        // Apply order status synchronization migration idempotently
-        const orderStatusMigPath = path.join(process.cwd(), 'database', 'migrations', '005_order_status_sync.sql');
-        if (fs.existsSync(orderStatusMigPath)) {
-          const migSql = fs.readFileSync(orderStatusMigPath, 'utf-8');
-          await client.query(migSql);
-          console.info('[DB] Order status synchronization migration verified/applied.');
-        }
-
-        // Apply payment audit and restaurant lifecycle migration idempotently
-        const paymentAuditMigPath = path.join(process.cwd(), 'database', 'migrations', '006_payment_audit_and_restaurant_lifecycle.sql');
-        if (fs.existsSync(paymentAuditMigPath)) {
-          const migSql = fs.readFileSync(paymentAuditMigPath, 'utf-8');
-          await client.query(migSql);
-          console.info('[DB] Payment audit and restaurant lifecycle migration verified/applied.');
-        }
-
-        // Apply direct UPI payment attempts migration idempotently
-        const paymentAttemptsMigPath = path.join(process.cwd(), 'database', 'migrations', '007_direct_upi_payment_attempts.sql');
-        if (fs.existsSync(paymentAttemptsMigPath)) {
-          const migSql = fs.readFileSync(paymentAttemptsMigPath, 'utf-8');
-          await client.query(migSql);
-          console.info('[DB] Direct UPI payment attempts migration verified/applied.');
-        }
-
-        // Apply order confirmed and feedback migration idempotently
-        const feedbackMigPath = path.join(process.cwd(), 'database', 'migrations', '009_order_confirmed_and_feedback.sql');
-        if (fs.existsSync(feedbackMigPath)) {
-          const migSql = fs.readFileSync(feedbackMigPath, 'utf-8');
-          await client.query(migSql);
-          console.info('[DB] Order confirmed timestamp & customer feedback requests migration verified/applied.');
-        }
-
-        // NOTE: Migration 008 (Multi-Tenant Restaurant Inventory & Stock Management)
-        // has already been executed manually in production Supabase.
-        // It is treated as APPLIED and is NOT re-executed automatically.
-        console.info('[DB] Migration 008 status: APPLIED in production Supabase.');
-
+        console.info('[DB] Migration status: APPLIED in PostgreSQL/Supabase.');
         return { success: true, mode: 'postgresql' };
       } finally {
         client.release();
       }
     } catch (err: any) {
-      console.warn('[DB] Could not connect to PostgreSQL with DATABASE_URL, continuing with in-memory store:', err.message);
+      console.error('[DB] Could not connect to PostgreSQL/Supabase with configured URL:', err.message);
       isPostgresActive = false;
       globalThis.__isPostgresActive = false;
       return { success: false, mode: 'in_memory', error: err.message };

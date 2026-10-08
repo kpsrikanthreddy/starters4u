@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { query, getClient, inMemoryDb, isPostgresRunning } from '../db.js';
+import { query, getClient, inMemoryDb, isPostgresRunning, isPostgresConfigured } from '../db.js';
 import { Order, OrderStatus, OrderType, EntrySource, PaymentMethod, CartItem, CustomerDetails, CustomerLocationSource } from '../../src/types.js';
 import { findOrCreateCustomer } from './customerService.js';
 import { validateSignedToken } from './qrService.js';
@@ -1068,7 +1068,11 @@ export async function getOrders(
   status?: string,
   limit: number = 50
 ): Promise<Order[]> {
-  if (isPostgresRunning()) {
+  const isPgConfigured = isPostgresConfigured();
+  const isPgActive = isPostgresRunning();
+
+  // In production or whenever PostgreSQL/Supabase is configured or active: MUST query database!
+  if (isPgActive || isPgConfigured || process.env.NODE_ENV === 'production') {
     try {
       let sql = `
         SELECT o.*, c.name as cust_name, c.phone as cust_phone, c.email as cust_email, c.address as cust_address, c.landmark as cust_landmark
@@ -1141,12 +1145,14 @@ export async function getOrders(
         results.push(orderObj);
       }
       return results;
-    } catch (err) {
-      console.error('[OrderService] Error fetching orders from PG, fallback to in-memory:', err);
+    } catch (err: any) {
+      console.error('[OrderService] Error fetching orders from PostgreSQL/Supabase:', err.message);
+      // NEVER silently fall back to in-memory store in production or when DB is configured!
+      throw new Error(`Database error fetching orders: ${err.message}`);
     }
   }
 
-  // In-Memory Fallback
+  // Local development fallback only when NO database URL is configured
   let filtered = inMemoryDb.orders.filter((o) => o.restaurant_id === restaurantId);
   if (branchId) {
     filtered = filtered.filter((o) => o.branch_id === branchId || !o.branch_id);
@@ -1169,7 +1175,10 @@ export async function getOrders(
 }
 
 export async function getOrderById(orderIdentifier: string, restaurantId: string = DEFAULT_RESTAURANT_ID): Promise<Order | null> {
-  if (isPostgresRunning()) {
+  const isPgConfigured = isPostgresConfigured();
+  const isPgActive = isPostgresRunning();
+
+  if (isPgActive || isPgConfigured || process.env.NODE_ENV === 'production') {
     try {
       // Query by UUID id OR human-readable order_number
       const orderRes = await query(
@@ -1203,8 +1212,9 @@ export async function getOrderById(orderIdentifier: string, restaurantId: string
 
       const fbRec = await getFeedbackRequestForOrder(row.id);
       return assembleOrderObject(row, itemRows, histRows, custObj, fbRec);
-    } catch (err) {
-      console.error('[OrderService] Error in getOrderById PG:', err);
+    } catch (err: any) {
+      console.error('[OrderService] Error in getOrderById PG:', err.message);
+      throw new Error(`Database error fetching order: ${err.message}`);
     }
   }
 

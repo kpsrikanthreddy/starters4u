@@ -35,6 +35,7 @@ export const OrdersSection: React.FC = () => {
   const { user, restaurant, adminFetch } = useAdminAuth();
   const [orders, setOrders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
@@ -106,8 +107,14 @@ export const OrdersSection: React.FC = () => {
 
     setSendingFeedbackOrderId(ord.id);
     try {
-      const res = await adminFetch(`/api/admin/orders/${encodeURIComponent(ord.id)}/feedback`, {
+      const res = await adminFetch('/api/whatsapp/feedback', {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          orderId: ord.id,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
@@ -169,10 +176,15 @@ export const OrdersSection: React.FC = () => {
         const data = await res.json();
         if (Array.isArray(data)) {
           setOrders(data);
+          setFetchError(null);
         }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setFetchError(errData.error || 'Unable to load orders. Please try again.');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('[OrdersSection] Error fetching orders:', err);
+      setFetchError('Unable to load orders. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -377,6 +389,20 @@ export const OrdersSection: React.FC = () => {
               <div className="p-12 text-center text-slate-400">
                 <div className="w-6 h-6 border-2 border-rose-500 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
                 <p className="text-xs">Loading tenant orders...</p>
+              </div>
+            ) : fetchError ? (
+              <div className="p-12 text-center">
+                <AlertCircle className="w-8 h-8 mx-auto mb-2 text-rose-500" />
+                <p className="text-xs font-bold text-rose-600">{fetchError}</p>
+                <button
+                  onClick={() => {
+                    setIsLoading(true);
+                    fetchOrders();
+                  }}
+                  className="mt-3 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-bold rounded-lg transition"
+                >
+                  Retry
+                </button>
               </div>
             ) : filteredOrders.length === 0 ? (
               <div className="p-12 text-center text-slate-400">
