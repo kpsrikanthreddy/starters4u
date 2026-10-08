@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useAdminAuth } from '../../../context/AdminAuthContext';
 import { soundService } from '../../../utils/audio';
 import { PrintModal } from '../../PrintModal';
-import { formatOrderDateTime, formatOrderDateTimeLong } from '../../../utils/dateUtils';
+import { formatOrderDateTime, formatOrderDateTimeLong, formatOrderDateOnly } from '../../../utils/dateUtils';
 import {
   Search,
   Filter,
@@ -67,6 +67,17 @@ export const OrdersSection: React.FC = () => {
   const isDeliveredOrCompleted = (status?: string): boolean => {
     const s = (status || '').toLowerCase();
     return s === 'delivered' || s === 'completed' || s === 'settled';
+  };
+
+  const getOrderDate = (ord: any): string | undefined => {
+    return (
+      ord?.createdAt ||
+      ord?.created_at ||
+      ord?.confirmedAt ||
+      ord?.confirmed_at ||
+      (Array.isArray(ord?.statusHistory) && ord.statusHistory[0]?.timestamp) ||
+      undefined
+    );
   };
 
   const getOrderConfirmedAt = (ord: any): string | undefined => {
@@ -383,7 +394,7 @@ export const OrdersSection: React.FC = () => {
                       <th className="py-3 px-4">Customer</th>
                       <th className="py-3 px-4">Items</th>
                       <th className="py-3 px-4">Total</th>
-                      <th className="py-3 px-4">Confirmed At</th>
+                      <th className="py-3 px-4">Date & Time</th>
                       <th className="py-3 px-4">Status</th>
                       <th className="py-3 px-4 text-right">Action</th>
                     </tr>
@@ -422,8 +433,11 @@ export const OrdersSection: React.FC = () => {
                           <td className="py-3.5 px-4 font-black text-slate-900">
                             ₹{Number(ord.grandTotal || ord.total || 0).toLocaleString('en-IN')}
                           </td>
-                          <td className="py-3.5 px-4 font-medium text-slate-700 whitespace-nowrap">
-                            {formatOrderDateTime(getOrderConfirmedAt(ord), currentTimezone)}
+                          <td
+                            className="py-3.5 px-4 font-medium text-slate-700 whitespace-nowrap"
+                            title={formatOrderDateTimeLong(getOrderDate(ord), currentTimezone)}
+                          >
+                            {formatOrderDateTime(getOrderDate(ord), currentTimezone)}
                           </td>
                           <td className="py-3.5 px-4">
                             <span

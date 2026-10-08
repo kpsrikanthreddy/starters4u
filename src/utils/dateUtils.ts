@@ -10,13 +10,24 @@ export const DEFAULT_RESTAURANT_TIMEZONE = 'Asia/Kolkata';
  * Example: "29 Sep, 6:25 PM"
  */
 export function formatOrderDateTime(
-  dateString?: string | Date | null,
+  dateString?: string | number | Date | null,
   timeZone: string = DEFAULT_RESTAURANT_TIMEZONE
 ): string {
   if (!dateString) return '—';
 
   try {
-    const d = typeof dateString === 'string' ? new Date(dateString) : dateString;
+    let d: Date;
+    if (dateString instanceof Date) {
+      d = dateString;
+    } else if (typeof dateString === 'number') {
+      d = new Date(dateString);
+    } else if (typeof dateString === 'string') {
+      const num = Number(dateString);
+      d = !isNaN(num) && /^\d+$/.test(dateString) ? new Date(num) : new Date(dateString);
+    } else {
+      return '—';
+    }
+
     if (isNaN(d.getTime())) return '—';
 
     // Format: Day Month, Hour:Minute AM/PM in configured timezone
@@ -36,17 +47,66 @@ export function formatOrderDateTime(
 }
 
 /**
- * Format timestamp in restaurant timezone for detailed modal display:
- * Example: "29 Sep 2026, 6:25 PM"
+ * Format timestamp in restaurant timezone for compact table column displaying date only:
+ * Example: "1 Oct"
  */
-export function formatOrderDateTimeLong(
-  dateString?: string | Date | null,
+export function formatOrderDateOnly(
+  dateString?: string | number | Date | null,
   timeZone: string = DEFAULT_RESTAURANT_TIMEZONE
 ): string {
   if (!dateString) return '—';
 
   try {
-    const d = typeof dateString === 'string' ? new Date(dateString) : dateString;
+    let d: Date;
+    if (dateString instanceof Date) {
+      d = dateString;
+    } else if (typeof dateString === 'number') {
+      d = new Date(dateString);
+    } else if (typeof dateString === 'string') {
+      const num = Number(dateString);
+      d = !isNaN(num) && /^\d+$/.test(dateString) ? new Date(num) : new Date(dateString);
+    } else {
+      return '—';
+    }
+
+    if (isNaN(d.getTime())) return '—';
+
+    // Format: Day Month in configured timezone (date only, no time)
+    const formatter = new Intl.DateTimeFormat('en-IN', {
+      timeZone: timeZone || DEFAULT_RESTAURANT_TIMEZONE,
+      day: 'numeric',
+      month: 'short',
+    });
+
+    return formatter.format(d);
+  } catch (err) {
+    return '—';
+  }
+}
+
+/**
+ * Format timestamp in restaurant timezone for detailed modal display:
+ * Example: "29 Sep 2026, 6:25 PM"
+ */
+export function formatOrderDateTimeLong(
+  dateString?: string | number | Date | null,
+  timeZone: string = DEFAULT_RESTAURANT_TIMEZONE
+): string {
+  if (!dateString) return '—';
+
+  try {
+    let d: Date;
+    if (dateString instanceof Date) {
+      d = dateString;
+    } else if (typeof dateString === 'number') {
+      d = new Date(dateString);
+    } else if (typeof dateString === 'string') {
+      const num = Number(dateString);
+      d = !isNaN(num) && /^\d+$/.test(dateString) ? new Date(num) : new Date(dateString);
+    } else {
+      return '—';
+    }
+
     if (isNaN(d.getTime())) return '—';
 
     const formatter = new Intl.DateTimeFormat('en-IN', {
