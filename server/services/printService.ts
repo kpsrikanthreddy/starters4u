@@ -41,6 +41,43 @@ export function registerSseClient(restaurantId: string, branchId: string, res: R
   // Send initial connected acknowledgement event
   res.write(`event: connected\ndata: ${JSON.stringify({ timestamp: new Date().toISOString(), restaurantId, branchId })}\n\n`);
 
+  // Replay any existing unclaimed PENDING jobs directly to the newly connected agent
+  setTimeout(async () => {
+    try {
+      const pendingJobs = await getPrintJobs(restaurantId, branchId, 'PENDING', 25);
+      for (const pJob of pendingJobs) {
+        if (!pJob.claimedByDeviceId && pJob.status === 'PENDING') {
+          const rawId = pJob.id;
+          const normStation = normalizeStationName(pJob.station);
+          const aliases = getStationAliases(pJob.station);
+          const enriched = {
+            ...pJob,
+            id: rawId,
+            jobId: rawId,
+            job_id: rawId,
+            printJobId: rawId,
+            restaurantId,
+            restaurant_id: restaurantId,
+            branchId,
+            branch_id: branchId,
+            orderId: pJob.orderId,
+            order_id: pJob.orderId,
+            station: normStation,
+            rawStation: pJob.station,
+            normalizedStation: normStation,
+            stationAliases: aliases,
+          };
+          const jsonStr = JSON.stringify(enriched);
+          res.write(`event: new-job\ndata: ${jsonStr}\n\n`);
+          res.write(`event: print-job\ndata: ${jsonStr}\n\n`);
+          res.write(`data: ${jsonStr}\n\n`);
+        }
+      }
+    } catch (err) {
+      console.warn('[PrintService] Error replaying pending jobs to SSE client:', err);
+    }
+  }, 100);
+
   return () => {
     set.delete(res);
     if (set.size === 0) {
@@ -49,15 +86,134 @@ export function registerSseClient(restaurantId: string, branchId: string, res: R
   };
 }
 
+// ==========================================================
+// STATION NAME NORMALIZATION & ALIAS MAPPINGS (Requirement 5)
+// ==========================================================
+export function normalizeStationName(station?: string | null): string {
+  if (!station) return 'Kitchen Master';
+  const clean = station.trim().toLowerCase().replace(/\s*\(\d+mm\)/i, '').replace(/[_-]/g, ' ');
+
+  if (clean.includes('chinese') || clean.includes('wok')) {
+    return 'Chinese Special';
+  }
+  if (clean.includes('bill') || clean.includes('cashier') || clean.includes('receipt') || clean.includes('counter')) {
+    return 'Billing Counter';
+  }
+  if (clean.includes('pizza') || clean.includes('oven')) {
+    return 'Pizza Oven Station';
+  }
+  if (clean.includes('master') || clean.includes('kitchen') || clean.includes('main') || clean.includes('all')) {
+    return 'Kitchen Master';
+  }
+  return station.trim();
+}
+
+export function getStationAliases(station?: string | null): string[] {
+  const normalized = normalizeStationName(station);
+  switch (normalized) {
+    case 'Chinese Special':
+      return [
+        'Chinese Special',
+        'Chinese Special (58mm)',
+        'Chinese Wok Station',
+        'Chinese Wok',
+        'Chinese',
+        'chinese_wok',
+        'chinese_special',
+      ];
+    case 'Billing Counter':
+      return [
+        'Billing Counter',
+        'Billing Counter (80mm)',
+        'billing',
+        'Billing',
+        'Cashier',
+        'billing_counter',
+        'cashier',
+      ];
+    case 'Pizza Oven Station':
+      return [
+        'Pizza Oven Station',
+        'Pizza Oven',
+        'Pizza Oven Station (80mm)',
+        'pizza_oven',
+        'pizza_oven_station',
+      ];
+    case 'Kitchen Master':
+      return [
+        'Kitchen Master',
+        'Kitchen Master (80mm)',
+        'Main Kitchen',
+        'kitchen_master',
+        'main_kitchen',
+        'All Stations',
+        'all_stations',
+      ];
+    default:
+      return [station || ''];
+  }
+}
+
+export function isStationMatch(jobStation?: string | null, driverStation?: string | null): boolean {
+  if (!jobStation || !driverStation) return false;
+  if (jobStation.trim().toLowerCase() === driverStation.trim().toLowerCase()) return true;
+
+  const normJob = normalizeStationName(jobStation);
+  const normDriver = normalizeStationName(driverStation);
+  if (normJob === normDriver) return true;
+
+  // Kitchen Master / All Stations fallback
+  if (normJob === 'Kitchen Master' || normDriver === 'Kitchen Master') return true;
+
+  const jobAliases = getStationAliases(jobStation).map((s) => s.toLowerCase());
+  return jobAliases.includes(driverStation.trim().toLowerCase());
+}
+
 export function broadcastPrintEvent(restaurantId: string, branchId: string, eventName: string, data: any): void {
   const key = `${restaurantId}:${branchId}`;
   const set = sseClients.get(key);
   if (!set || set.size === 0) return;
 
-  const payload = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
+  // Requirement 6: Enrich SSE payload with jobId, tenant/branch identifiers, and normalized station aliases
+  const rawId = data.id || data.jobId || data.job_id;
+  const normStation = normalizeStationName(data.station);
+  const aliases = getStationAliases(data.station);
+  const enrichedData = {
+    ...data,
+    id: rawId,
+    jobId: rawId,
+    job_id: rawId,
+    printJobId: rawId,
+    restaurantId,
+    restaurant_id: restaurantId,
+    branchId,
+    branch_id: branchId,
+    orderId: data.orderId || data.order_id,
+    order_id: data.orderId || data.order_id,
+    orderNumber: (data.payload as any)?.orderNumber || data.orderNumber,
+    order_number: (data.payload as any)?.orderNumber || data.orderNumber,
+    station: normStation,
+    rawStation: data.station,
+    normalizedStation: normStation,
+    stationAliases: aliases,
+    payload: {
+      ...(typeof data.payload === 'object' ? data.payload : {}),
+      station: normStation,
+      normalizedStation: normStation,
+      stationAliases: aliases,
+    },
+  };
+
+  const jsonStr = JSON.stringify(enrichedData);
   for (const client of set) {
     try {
-      client.write(payload);
+      // Send with requested event name (e.g. 'new-job' or 'job-status-updated')
+      client.write(`event: ${eventName}\ndata: ${jsonStr}\n\n`);
+      // Also broadcast as 'print-job' and default unnamed 'message' so ANY EventSource listener catches it
+      if (eventName === 'new-job') {
+        client.write(`event: print-job\ndata: ${jsonStr}\n\n`);
+        client.write(`data: ${jsonStr}\n\n`);
+      }
     } catch (err) {
       console.warn('[PrintService] Failed to write to SSE client, removing:', err);
       set.delete(client);
@@ -241,14 +397,17 @@ export function buildBillPayload(
   };
 }
 
+
+
 // Create atomic print jobs for an order (idempotent; safe against browser refreshes)
 export async function createPrintJobsForOrder(
   order: Order,
   options: { reason: 'confirmed' | 'online_paid' | 'manual'; isReprint?: boolean }
 ): Promise<PrintJob[]> {
-  // Production Payment & Order Safety: Print jobs must ONLY be created for real verified paid or admin-confirmed orders
+  // Production Payment & Order Safety: Print jobs must ONLY be created for real verified paid or store-active orders
   const isPaid = order.paymentStatus === 'paid';
   const isConfirmed = [
+    'placed',
     'confirmed',
     'accepted',
     'baking',
@@ -268,17 +427,47 @@ export async function createPrintJobsForOrder(
     return [];
   }
 
-  if (!isPaid && !isConfirmed && !options.isReprint && options.reason !== 'manual') {
+  const isEligibleOrder =
+    isPaid ||
+    isConfirmed ||
+    options.isReprint ||
+    options.reason === 'manual' ||
+    options.reason === 'confirmed' ||
+    options.reason === 'online_paid' ||
+    ['dine_in', 'counter'].includes(order.orderType) ||
+    ['cod', 'cash'].includes(order.paymentMethod);
+
+  if (!isEligibleOrder) {
     console.warn(
-      `[PrintService] Safety refusal: Order ${order.id} is neither verified paid nor admin-confirmed (status: ${order.status}, paymentStatus: ${order.paymentStatus}). Refusing print job creation.`
+      `[PrintService] Safety refusal: Order ${order.id} is not eligible for printing (status: ${order.status}, paymentStatus: ${order.paymentStatus}). Refusing print job creation.`
     );
     return [];
   }
 
   const restaurantId = order.restaurantId || (order as any).restaurant_id || 'a0000000-0000-0000-0000-000000000001';
-  const branchId = order.branchId || (order as any).branch_id || 'b0000000-0000-0000-0000-000000000001';
+  let branchId = order.branchId || (order as any).branch_id;
+  if (!branchId || branchId === 'null' || branchId === 'undefined') {
+    if (isPostgresRunning()) {
+      try {
+        const brRes = await query(
+          `SELECT id FROM restaurant_branches WHERE restaurant_id = $1 AND is_active = TRUE ORDER BY created_at ASC LIMIT 1`,
+          [restaurantId]
+        );
+        if (brRes.rows.length > 0) {
+          branchId = brRes.rows[0].id;
+        }
+      } catch (err) {
+        console.warn('[PrintService] Could not resolve branch ID:', err);
+      }
+    }
+    if (!branchId) branchId = 'b0000000-0000-0000-0000-000000000001';
+  }
+
   const info = await getRestaurantAndBranchInfo(restaurantId, branchId);
-  const kotStation = order.kotStation || 'kitchen_master';
+  // Normalize KOT station to standard name (e.g. 'Chinese Special', 'Pizza Oven Station', 'Kitchen Master')
+  const rawKotStation = order.kotStation || 'Kitchen Master';
+  const kotStation = normalizeStationName(rawKotStation);
+  const billStation = 'Billing Counter';
 
   const kotPayload = buildKotPayload(order, info.restaurantName, info.branchName, kotStation, options.isReprint || false);
   const billPayload = buildBillPayload(order, info, options.isReprint || false);
@@ -295,7 +484,12 @@ export async function createPrintJobsForOrder(
         ? `${restaurantId}-${branchId}-${order.id}-KOT-REPRINT-${Date.now()}`
         : `${restaurantId}-${branchId}-${order.id}-KOT-${kotStation}`,
       isReprint: !!options.isReprint,
-      payload: kotPayload,
+      payload: {
+        ...kotPayload,
+        station: kotStation,
+        normalizedStation: kotStation,
+        stationAliases: getStationAliases(kotStation),
+      },
     },
     {
       id: crypto.randomUUID(),
@@ -303,12 +497,17 @@ export async function createPrintJobsForOrder(
       branchId,
       orderId: order.id,
       jobType: 'BILL' as PrintJobType,
-      station: 'billing',
+      station: billStation,
       idempotencyKey: options.isReprint
         ? `${restaurantId}-${branchId}-${order.id}-BILL-REPRINT-${Date.now()}`
         : `${restaurantId}-${branchId}-${order.id}-BILL`,
       isReprint: !!options.isReprint,
-      payload: billPayload,
+      payload: {
+        ...billPayload,
+        station: billStation,
+        normalizedStation: billStation,
+        stationAliases: getStationAliases(billStation),
+      },
     },
   ];
 
@@ -798,46 +997,113 @@ export async function updatePrintJobStatus(
   return job;
 }
 
-// Get pending or active print jobs for fallback polling
+// Get pending or active print jobs for fallback polling (Requirement 7)
 export async function getPrintJobs(
   restaurantId: string,
   branchId: string,
   status?: string,
-  limit = 25
+  limit = 100,
+  deviceId?: string
 ): Promise<PrintJob[]> {
   if (isPostgresRunning()) {
     try {
-      const sql = `
-        SELECT * FROM print_jobs
-        WHERE restaurant_id = $1 AND branch_id = $2
-          ${status ? 'AND status = $3' : ''}
-        ORDER BY created_at ASC
-        LIMIT $${status ? 4 : 3};
-      `;
-      const params = status ? [restaurantId, branchId, status, limit] : [restaurantId, branchId, limit];
+      const deviceUuid = await resolveDeviceUuid(deviceId);
+      const isPendingFilter = !status || status.toUpperCase() === 'PENDING';
+
+      let sql: string;
+      let params: any[];
+
+      if (isPendingFilter) {
+        // Requirement 7: Safe fallback polling returns unclaimed pending jobs for its own device/branch.
+        // Orders newest first so newly placed orders are never starved by older unprocessed rows!
+        if (deviceUuid) {
+          sql = `
+            SELECT * FROM print_jobs
+            WHERE restaurant_id = $1 AND branch_id = $2
+              AND status = 'PENDING'
+              AND (claimed_by_device_id IS NULL OR claimed_by_device_id = $3)
+            ORDER BY created_at DESC
+            LIMIT $4;
+          `;
+          params = [restaurantId, branchId, deviceUuid, limit];
+        } else {
+          sql = `
+            SELECT * FROM print_jobs
+            WHERE restaurant_id = $1 AND branch_id = $2
+              AND status = 'PENDING'
+            ORDER BY created_at DESC
+            LIMIT $3;
+          `;
+          params = [restaurantId, branchId, limit];
+        }
+      } else if (status.toUpperCase() === 'ALL') {
+        sql = `
+          SELECT * FROM print_jobs
+          WHERE restaurant_id = $1 AND branch_id = $2
+          ORDER BY created_at DESC
+          LIMIT $3;
+        `;
+        params = [restaurantId, branchId, limit];
+      } else {
+        sql = `
+          SELECT * FROM print_jobs
+          WHERE restaurant_id = $1 AND branch_id = $2
+            AND status = $3
+          ORDER BY created_at DESC
+          LIMIT $4;
+        `;
+        params = [restaurantId, branchId, status.toUpperCase(), limit];
+      }
+
       const res = await query(sql, params);
 
-      return res.rows.map((row) => ({
-        id: row.id,
-        restaurantId: row.restaurant_id,
-        branchId: row.branch_id,
-        orderId: row.order_id,
-        jobType: row.job_type,
-        station: row.station,
-        idempotencyKey: row.idempotency_key,
-        status: row.status,
-        isReprint: row.is_reprint,
-        claimedByDeviceId: row.claimed_by_device_id,
-        claimedAt: row.claimed_at,
-        printedAt: row.printed_at,
-        failedAt: row.failed_at,
-        errorMessage: row.error_message,
-        retryCount: row.retry_count,
-        maxRetries: row.max_retries,
-        payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      }));
+      return res.rows.map((row) => {
+        const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+        const normStation = normalizeStationName(row.station);
+        const aliases = getStationAliases(row.station);
+        return {
+          id: row.id,
+          jobId: row.id,
+          job_id: row.id,
+          printJobId: row.id,
+          restaurantId: row.restaurant_id,
+          restaurant_id: row.restaurant_id,
+          branchId: row.branch_id,
+          branch_id: row.branch_id,
+          orderId: row.order_id,
+          order_id: row.order_id,
+          orderNumber: payload?.orderNumber || payload?.order_number,
+          order_number: payload?.orderNumber || payload?.order_number,
+          jobType: row.job_type,
+          job_type: row.job_type,
+          station: normStation,
+          rawStation: row.station,
+          normalizedStation: normStation,
+          stationAliases: aliases,
+          idempotencyKey: row.idempotency_key,
+          status: row.status,
+          isReprint: row.is_reprint,
+          claimedByDeviceId: row.claimed_by_device_id,
+          claimed_by_device_id: row.claimed_by_device_id,
+          claimedAt: row.claimed_at,
+          printedAt: row.printed_at,
+          failedAt: row.failed_at,
+          errorMessage: row.error_message,
+          retryCount: row.retry_count,
+          maxRetries: row.max_retries,
+          payload: {
+            ...(payload || {}),
+            station: normStation,
+            rawStation: row.station,
+            normalizedStation: normStation,
+            stationAliases: aliases,
+          },
+          createdAt: row.created_at,
+          created_at: row.created_at,
+          updatedAt: row.updated_at,
+          updated_at: row.updated_at,
+        };
+      });
     } catch (err) {
       console.error('[PrintService] Error fetching jobs from PG:', err);
     }
@@ -847,10 +1113,313 @@ export async function getPrintJobs(
   let list = inMemoryDb.print_jobs.filter(
     (j) => j.restaurantId === restaurantId && j.branchId === branchId
   );
-  if (status) {
-    list = list.filter((j) => j.status === status);
+  if (status && status !== 'ALL') {
+    list = list.filter((j) => j.status === status.toUpperCase());
+  } else if (!status) {
+    list = list.filter((j) => j.status === 'PENDING' && (!j.claimedByDeviceId || j.claimedByDeviceId === deviceId));
   }
-  return list.slice(0, limit);
+  return list
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, limit)
+    .map((j) => {
+      const normStation = normalizeStationName(j.station);
+      const aliases = getStationAliases(j.station);
+      return {
+        ...j,
+        jobId: j.id,
+        job_id: j.id,
+        printJobId: j.id,
+        restaurant_id: j.restaurantId,
+        branch_id: j.branchId,
+        order_id: j.orderId,
+        station: normStation,
+        rawStation: j.station,
+        normalizedStation: normStation,
+        stationAliases: aliases,
+      };
+    });
+}
+
+// Print Delivery Audit Data Structure (Requirement 1 & 2)
+export interface PrintDeliveryAudit {
+  orderId: string;
+  orderNumber: string;
+  restaurantId: string;
+  restaurantName: string;
+  branchId: string;
+  branchName: string;
+  kotEligible: boolean;
+  kotReason: string;
+  billEligible: boolean;
+  billReason: string;
+  pairedDevice?: {
+    id: string;
+    deviceId: string;
+    deviceName: string;
+    isOnline: boolean;
+    lastSeenAt?: string;
+  } | null;
+  jobs: Array<{
+    id: string;
+    jobType: 'KOT' | 'BILL';
+    station: string;
+    normalizedStation: string;
+    mappedPrinter?: string;
+    status: 'queued' | 'sent' | 'claimed' | 'printing' | 'printed' | 'failed' | 'skipped' | string;
+    rawStatus: string;
+    claimedByDeviceId?: string | null;
+    claimedByDeviceName?: string | null;
+    createdAt: string;
+    claimedAt?: string | null;
+    printedAt?: string | null;
+    failedAt?: string | null;
+    errorMessage?: string | null;
+    retryCount: number;
+  }>;
+}
+
+// Retrieve complete Print Delivery Audit for an order (Requirement 1 & 2)
+export async function getOrderPrintDeliveryAudit(
+  orderId: string,
+  restaurantId?: string
+): Promise<PrintDeliveryAudit | null> {
+  let orderRow: any = null;
+  let printJobRows: any[] = [];
+  let devices: any[] = [];
+  let configs: any[] = [];
+
+  if (isPostgresRunning()) {
+    try {
+      const ordRes = await query(
+        `SELECT * FROM orders WHERE id::text = $1 ${restaurantId ? 'AND restaurant_id::text = $2' : ''} LIMIT 1`,
+        restaurantId ? [orderId, restaurantId] : [orderId]
+      );
+      if (ordRes.rows.length === 0) return null;
+      orderRow = ordRes.rows[0];
+
+      const jobsRes = await query(
+        `SELECT * FROM print_jobs WHERE order_id::text = $1 ORDER BY created_at ASC`,
+        [orderId]
+      );
+      printJobRows = jobsRes.rows;
+
+      const devRes = await query(
+        `SELECT id, device_id, device_name, is_active, last_seen_at, last_heartbeat_at FROM print_devices WHERE restaurant_id = $1 AND branch_id = $2 ORDER BY is_active DESC, GREATEST(last_seen_at, last_heartbeat_at) DESC NULLS LAST, created_at DESC`,
+        [orderRow.restaurant_id, orderRow.branch_id]
+      );
+      devices = devRes.rows;
+
+      const cfgRes = await query(
+        `SELECT * FROM printer_configurations WHERE restaurant_id = $1 AND branch_id = $2`,
+        [orderRow.restaurant_id, orderRow.branch_id]
+      );
+      configs = cfgRes.rows;
+    } catch (err) {
+      console.error('[PrintService] Error querying audit data in PG:', err);
+    }
+  } else {
+    orderRow = inMemoryDb.orders.find(
+      (o) => o.id === orderId && (!restaurantId || o.restaurant_id === restaurantId)
+    );
+    if (!orderRow) return null;
+    printJobRows = inMemoryDb.print_jobs.filter((j) => j.orderId === orderId);
+    devices = inMemoryDb.print_devices.filter(
+      (d) => d.restaurantId === orderRow.restaurant_id && d.branchId === orderRow.branch_id
+    );
+    configs = inMemoryDb.printer_configurations.filter(
+      (c) => c.restaurantId === orderRow.restaurant_id && c.branchId === orderRow.branch_id
+    );
+  }
+
+  if (!orderRow) return null;
+
+  const info = await getRestaurantAndBranchInfo(orderRow.restaurant_id, orderRow.branch_id);
+
+  // Determine active paired terminal for this outlet
+  const nowMs = Date.now();
+  let pairedDevice: PrintDeliveryAudit['pairedDevice'] = null;
+  const activeDevice = devices.find((d) => d.is_active || d.isActive);
+  if (activeDevice) {
+    const lastSeen = activeDevice.last_seen_at || activeDevice.lastSeenAt || activeDevice.last_heartbeat_at;
+    const diffMs = lastSeen ? nowMs - new Date(lastSeen).getTime() : Infinity;
+    const isOnline = Boolean(
+      (activeDevice.is_active || activeDevice.isActive) &&
+      lastSeen &&
+      diffMs <= DEVICE_ONLINE_TIMEOUT_MS &&
+      diffMs >= -120000
+    );
+    pairedDevice = {
+      id: activeDevice.id,
+      deviceId: activeDevice.device_id || activeDevice.deviceId,
+      deviceName: activeDevice.device_name || activeDevice.deviceName,
+      isOnline,
+      lastSeenAt: lastSeen ? new Date(lastSeen).toISOString() : undefined,
+    };
+  }
+
+  // Calculate explicit eligibility & reasons (Requirement 2)
+  const isCancelled = ['cancelled', 'rejected'].includes(orderRow.status);
+  const isPaymentFailed = orderRow.payment_status === 'failed';
+  const isPaid = orderRow.payment_status === 'paid';
+  const isConfirmed = [
+    'confirmed',
+    'accepted',
+    'baking',
+    'preparing',
+    'packing',
+    'ready',
+    'ready_for_pickup',
+    'out_for_delivery',
+    'delivered',
+    'completed',
+    'settled',
+  ].includes(orderRow.status);
+
+  let kotEligible = true;
+  let kotReason = 'Order is active in kitchen workflow';
+  if (isCancelled) {
+    kotEligible = false;
+    kotReason = 'Order is cancelled/rejected';
+  }
+
+  let billEligible = true;
+  let billReason = 'Payment verified and order accepted';
+  if (isCancelled) {
+    billEligible = false;
+    billReason = 'Order is cancelled/rejected';
+  } else if (isPaymentFailed) {
+    billEligible = false;
+    billReason = 'Online payment failed';
+  } else if (!isPaid && !isConfirmed && !['dine_in', 'counter'].includes(orderRow.order_type)) {
+    billEligible = false;
+    billReason = 'Pending customer payment verification or store acceptance';
+  }
+
+  // Map print jobs to audit format
+  const mappedJobs = printJobRows.map((j) => {
+    const rawStatus = (j.status || 'PENDING').toUpperCase();
+    let displayStatus: 'queued' | 'sent' | 'claimed' | 'printing' | 'printed' | 'failed' | 'skipped' = 'queued';
+
+    if (rawStatus === 'PENDING') displayStatus = 'queued';
+    else if (rawStatus === 'CLAIMED') displayStatus = 'claimed';
+    else if (rawStatus === 'PRINTING') displayStatus = 'printing';
+    else if (rawStatus === 'PRINTED') displayStatus = 'printed';
+    else if (rawStatus === 'FAILED') displayStatus = 'failed';
+    else if (rawStatus === 'CANCELLED') displayStatus = 'skipped';
+
+    const normalizedStation = normalizeStationName(j.station);
+
+    // Resolve mapped printer name from configuration
+    const matchingConfig = configs.find((cfg) => {
+      const cfgStation = cfg.station;
+      return isStationMatch(j.station, cfgStation);
+    });
+    const mappedPrinter = matchingConfig?.printer_name || matchingConfig?.printerName || (
+      normalizedStation === 'Billing Counter' ? 'POS-80 Thermal Printer' : 'POS-80-Series'
+    );
+
+    // Resolve claimed device
+    const claimedDevId = j.claimed_by_device_id || j.claimedByDeviceId;
+    const claimedDev = devices.find(
+      (d) => d.id === claimedDevId || d.device_id === claimedDevId || d.deviceId === claimedDevId
+    );
+    const claimedByDeviceName = claimedDev?.device_name || claimedDev?.deviceName || (claimedDevId ? 'POS Terminal' : null);
+
+    return {
+      id: j.id,
+      jobType: j.job_type || j.jobType,
+      station: j.station,
+      normalizedStation,
+      mappedPrinter,
+      status: displayStatus,
+      rawStatus,
+      claimedByDeviceId: claimedDevId || null,
+      claimedByDeviceName,
+      createdAt: j.created_at ? new Date(j.created_at).toISOString() : new Date().toISOString(),
+      claimedAt: j.claimed_at ? new Date(j.claimed_at).toISOString() : null,
+      printedAt: j.printed_at ? new Date(j.printed_at).toISOString() : null,
+      failedAt: j.failed_at ? new Date(j.failed_at).toISOString() : null,
+      errorMessage: j.error_message || j.errorMessage || null,
+      retryCount: j.retry_count !== undefined ? j.retry_count : (j.retryCount || 0),
+    };
+  });
+
+  return {
+    orderId: orderRow.id,
+    orderNumber: orderRow.order_number,
+    restaurantId: orderRow.restaurant_id,
+    restaurantName: info.restaurantName,
+    branchId: orderRow.branch_id,
+    branchName: info.branchName,
+    kotEligible,
+    kotReason,
+    billEligible,
+    billReason,
+    pairedDevice,
+    jobs: mappedJobs,
+  };
+}
+
+// Staff manual re-spool for an order's print jobs
+export async function respoolOrderPrintJobs(
+  orderId: string,
+  restaurantId: string
+): Promise<{ success: boolean; jobs: PrintJob[]; message: string }> {
+  // Check if jobs exist in PG
+  if (isPostgresRunning()) {
+    try {
+      const existingRes = await query(
+        `SELECT * FROM print_jobs WHERE order_id = $1 AND restaurant_id = $2`,
+        [orderId, restaurantId]
+      );
+      if (existingRes.rows.length > 0) {
+        // Reset status to PENDING and release claims
+        const resetRes = await query(
+          `UPDATE print_jobs
+           SET status = 'PENDING', claimed_by_device_id = NULL, claimed_at = NULL,
+               failed_at = NULL, error_message = NULL, updated_at = NOW()
+           WHERE order_id = $1 AND restaurant_id = $2
+           RETURNING *;`,
+          [orderId, restaurantId]
+        );
+        const jobs = resetRes.rows.map((row) => {
+          const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+          const mapped: PrintJob = {
+            id: row.id,
+            restaurantId: row.restaurant_id,
+            branchId: row.branch_id,
+            orderId: row.order_id,
+            jobType: row.job_type,
+            station: row.station,
+            idempotencyKey: row.idempotency_key,
+            status: row.status,
+            isReprint: row.is_reprint,
+            claimedByDeviceId: null,
+            claimedAt: null,
+            printedAt: null,
+            failedAt: null,
+            errorMessage: null,
+            retryCount: row.retry_count,
+            maxRetries: row.max_retries,
+            payload,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+          };
+          broadcastPrintEvent(mapped.restaurantId, mapped.branchId, 'new-job', mapped);
+          return mapped;
+        });
+        return {
+          success: true,
+          jobs,
+          message: `Successfully re-queued ${jobs.length} print jobs to agent stream.`,
+        };
+      }
+    } catch (err: any) {
+      console.error('[PrintService] Error re-spooling jobs in PG:', err);
+    }
+  }
+
+  return { success: false, jobs: [], message: 'No print jobs found to re-spool.' };
 }
 
 // Register or re-authenticate a physical desktop terminal

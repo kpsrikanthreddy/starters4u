@@ -44,9 +44,58 @@ export const OrdersSection: React.FC = () => {
   const [printType, setPrintType] = useState<'kot' | 'bill'>('kot');
   const [restaurantProfile, setRestaurantProfile] = useState<any>(null);
   const [orderToCancel, setOrderToCancel] = useState<any | null>(null);
-  const [cancelReason, setCancelReason] = useState('');
   const [orderToDelete, setOrderToDelete] = useState<any | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
   const [sendingFeedbackOrderId, setSendingFeedbackOrderId] = useState<string | null>(null);
+  const [printAudit, setPrintAudit] = useState<any | null>(null);
+  const [isLoadingAudit, setIsLoadingAudit] = useState(false);
+  const [isRespooling, setIsRespooling] = useState(false);
+  const [respoolMessage, setRespoolMessage] = useState<string | null>(null);
+
+  const isAuthorisedStaff = ['SUPER_ADMIN', 'PLATFORM_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN', 'BRANCH_MANAGER', 'CASHIER', 'KITCHEN'].includes(user?.role || '');
+
+  // Requirement 1 & 2: Fetch Print Delivery Audit when order is selected
+  useEffect(() => {
+    if (!selectedOrder?.id) {
+      setPrintAudit(null);
+      setRespoolMessage(null);
+      return;
+    }
+    let isMounted = true;
+    setIsLoadingAudit(true);
+    adminFetch(`/api/orders/${selectedOrder.id}/print-audit`)
+      .then((data: any) => {
+        if (isMounted) setPrintAudit(data);
+      })
+      .catch((err: any) => {
+        console.warn('Failed to load print delivery audit:', err);
+        if (isMounted) setPrintAudit(null);
+      })
+      .finally(() => {
+        if (isMounted) setIsLoadingAudit(false);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedOrder?.id, adminFetch]);
+
+  const handleRespoolOrder = async () => {
+    if (!selectedOrder?.id) return;
+    setIsRespooling(true);
+    setRespoolMessage(null);
+    try {
+      const res: any = await adminFetch(`/api/orders/${selectedOrder.id}/respool-print`, {
+        method: 'POST',
+      });
+      setRespoolMessage(res?.message || 'Print job re-queued and dispatched to print agent stream.');
+      const updatedAudit = await adminFetch(`/api/orders/${selectedOrder.id}/print-audit`);
+      setPrintAudit(updatedAudit);
+    } catch (err: any) {
+      setRespoolMessage(err?.message || 'Failed to re-spool print jobs.');
+    } finally {
+      setIsRespooling(false);
+    }
+  };
 
   const currentTimezone = restaurantProfile?.timezone || (restaurant as any)?.timezone || 'Asia/Kolkata';
 
@@ -982,6 +1031,222 @@ export const OrdersSection: React.FC = () => {
                           )}
                         </button>
                       )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Requirement 1 & 2: Print Delivery Audit Section (Visible to Authorised Restaurant Staff) */}
+                {isAuthorisedStaff && (
+                  <div className="pt-3 border-t border-slate-200/80">
+                    <div className="bg-slate-900 rounded-2xl p-3.5 text-white shadow-md space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center font-bold">
+                            <Printer className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-black tracking-wide text-slate-100 flex items-center gap-1.5">
+                              <span>Print Delivery Audit</span>
+                              <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-mono text-[9px] uppercase font-bold">
+                                Hardware Trail
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              {printAudit?.restaurantName || 'MOZZ'} • {printAudit?.branchName || 'Gachibowli'}
+                            </div>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={handleRespoolOrder}
+                          disabled={isRespooling}
+                          className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 text-white text-[10px] font-extrabold flex items-center gap-1 transition shadow-xs"
+                          title="Re-enqueue print jobs to the live SSE stream"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${isRespooling ? 'animate-spin' : ''}`} />
+                          <span>{isRespooling ? 'Re-spooling...' : 'Re-Spool to Agent'}</span>
+                        </button>
+                      </div>
+
+                      {respoolMessage && (
+                        <div className="p-2 rounded-xl bg-slate-800 text-emerald-400 border border-slate-700 text-[10px] font-semibold flex items-center gap-1.5">
+                          <Check className="w-3 h-3 shrink-0" />
+                          <span>{respoolMessage}</span>
+                        </div>
+                      )}
+
+                      {/* Paired Device Status */}
+                      <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800/80 space-y-1.5">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="text-slate-400 font-medium">Paired Agent Terminal</span>
+                          {printAudit?.pairedDevice ? (
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider flex items-center gap-1 ${
+                                printAudit.pairedDevice.isOnline
+                                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                  : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                              }`}
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full bg-current"></span>
+                              {printAudit.pairedDevice.isOnline ? 'Online (LIVE SSE)' : 'Offline (>90s)'}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-500">No paired device detected</span>
+                          )}
+                        </div>
+
+                        {printAudit?.pairedDevice && (
+                          <div className="text-[10px] space-y-0.5 text-slate-300 font-mono">
+                            <div>
+                              <strong className="text-slate-400 font-sans">Device:</strong> {printAudit.pairedDevice.deviceName}{' '}
+                              <span className="text-slate-500">({printAudit.pairedDevice.deviceId})</span>
+                            </div>
+                            {printAudit.pairedDevice.lastSeenAt && (
+                              <div className="text-slate-400">
+                                Last Heartbeat: {formatOrderDateTime(printAudit.pairedDevice.lastSeenAt, currentTimezone)}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Eligibility Breakdown */}
+                      <div className="grid grid-cols-2 gap-2 text-[10px]">
+                        <div className="p-2 rounded-xl bg-slate-950/60 border border-slate-800/80 space-y-0.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-300 uppercase tracking-wider text-[9px]">KOT Ticket</span>
+                            <span
+                              className={`font-black uppercase text-[9px] ${
+                                printAudit?.kotEligible ? 'text-emerald-400' : 'text-rose-400'
+                              }`}
+                            >
+                              {printAudit?.kotEligible ? '✓ Eligible' : '✕ Ineligible'}
+                            </span>
+                          </div>
+                          <div className="text-slate-400 text-[9px] leading-tight">
+                            {printAudit?.kotReason || 'Kitchen workflow'}
+                          </div>
+                        </div>
+
+                        <div className="p-2 rounded-xl bg-slate-950/60 border border-slate-800/80 space-y-0.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-300 uppercase tracking-wider text-[9px]">Bill Ticket</span>
+                            <span
+                              className={`font-black uppercase text-[9px] ${
+                                printAudit?.billEligible ? 'text-emerald-400' : 'text-rose-400'
+                              }`}
+                            >
+                              {printAudit?.billEligible ? '✓ Eligible' : '✕ Ineligible'}
+                            </span>
+                          </div>
+                          <div className="text-slate-400 text-[9px] leading-tight">
+                            {printAudit?.billReason || 'Payment verified'}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Print Jobs List */}
+                      <div className="space-y-1.5 pt-1">
+                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                          <span>Dispatch Queue & Jobs ({printAudit?.jobs?.length || 0})</span>
+                          {isLoadingAudit && <RefreshCw className="w-2.5 h-2.5 animate-spin text-slate-500" />}
+                        </div>
+
+                        {isLoadingAudit && !printAudit?.jobs ? (
+                          <div className="py-3 text-center text-xs text-slate-500">Loading print delivery audit...</div>
+                        ) : !printAudit?.jobs || printAudit.jobs.length === 0 ? (
+                          <div className="p-3 rounded-xl bg-slate-950/40 border border-slate-800 text-center text-[11px] text-slate-400 space-y-1">
+                            <div>No print jobs have been dispatched yet for this order.</div>
+                            <button
+                              type="button"
+                              onClick={handleRespoolOrder}
+                              disabled={isRespooling}
+                              className="text-rose-400 hover:text-rose-300 font-bold underline"
+                            >
+                              Create & Spool KOT/Bill Now
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {printAudit.jobs.map((job: any) => {
+                              const statusColor =
+                                job.status === 'printed'
+                                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                                  : job.status === 'printing'
+                                  ? 'bg-purple-500/20 text-purple-300 border-purple-500/30 animate-pulse'
+                                  : job.status === 'claimed'
+                                  ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
+                                  : job.status === 'failed'
+                                  ? 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+                                  : job.status === 'skipped'
+                                  ? 'bg-slate-700 text-slate-300 border-slate-600'
+                                  : 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+
+                              return (
+                                <div
+                                  key={job.id}
+                                  className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-[10px]"
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-1.5">
+                                      <span
+                                        className={`px-1.5 py-0.5 rounded font-black text-[9px] uppercase tracking-wider ${
+                                          job.jobType === 'KOT'
+                                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                            : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                                        }`}
+                                      >
+                                        {job.jobType}
+                                      </span>
+                                      <span className="font-bold text-slate-200">
+                                        Station: {job.normalizedStation || job.station}
+                                      </span>
+                                    </div>
+                                    <span
+                                      className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border ${statusColor}`}
+                                    >
+                                      {job.status}
+                                    </span>
+                                  </div>
+
+                                  <div className="space-y-0.5 text-slate-400 font-mono text-[9px]">
+                                    <div>
+                                      <strong className="text-slate-300 font-sans">Job ID:</strong> {job.id}
+                                    </div>
+                                    <div>
+                                      <strong className="text-slate-300 font-sans">Mapped Driver:</strong>{' '}
+                                      {job.mappedPrinter || 'Default POS Thermal'}
+                                    </div>
+                                    {job.claimedByDeviceName && (
+                                      <div>
+                                        <strong className="text-slate-300 font-sans">Claimed By:</strong>{' '}
+                                        {job.claimedByDeviceName}
+                                      </div>
+                                    )}
+                                    <div className="flex items-center gap-3 text-slate-500 pt-0.5">
+                                      <span>Created: {formatOrderDateTime(job.createdAt, currentTimezone)}</span>
+                                      {job.claimedAt && (
+                                        <span>Claimed: {formatOrderDateTime(job.claimedAt, currentTimezone)}</span>
+                                      )}
+                                      {job.printedAt && (
+                                        <span className="text-emerald-400">
+                                          Printed: {formatOrderDateTime(job.printedAt, currentTimezone)}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {job.errorMessage && (
+                                      <div className="p-1.5 rounded bg-rose-950/60 border border-rose-800/80 text-rose-300 font-sans font-semibold mt-1">
+                                        Error: {job.errorMessage} (Retries: {job.retryCount})
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}

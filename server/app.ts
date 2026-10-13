@@ -2149,16 +2149,17 @@ export function createApp(): express.Application {
     });
   });
 
-  // 5. Fallback polling for print jobs
+  // 5. Fallback polling for print jobs (Requirement 7)
   app.get('/api/print-agent/jobs', requireDeviceAuth, async (req, res) => {
     try {
       const status = req.query.status as string | undefined;
-      const limit = parseInt((req.query.limit as string) || '25', 10);
+      const limit = parseInt((req.query.limit as string) || '100', 10);
       const jobs = await printService.getPrintJobs(
         req.device!.restaurantId,
         req.device!.branchId,
         status,
-        limit
+        limit,
+        req.device!.id
       );
       res.json(jobs);
     } catch (err: any) {
@@ -2275,6 +2276,46 @@ export function createApp(): express.Application {
     } catch (err: any) {
       console.error('[PrintAgent API] Error creating reprint:', err);
       res.status(500).json({ error: 'Failed to create reprint job', details: err.message });
+    }
+  });
+
+  // 8.1 Print Delivery Audit API for Restaurant Staff (Requirement 1 & 2)
+  app.get('/api/orders/:id/print-audit', requireAuth, async (req, res) => {
+    try {
+      const restaurantId = (req as any).user?.restaurantId || (req.query.restaurantId as string);
+      const audit = await printService.getOrderPrintDeliveryAudit(req.params.id, restaurantId);
+      if (!audit) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+      res.json(audit);
+    } catch (err: any) {
+      console.error('[PrintAudit API] Error generating audit:', err);
+      res.status(500).json({ error: 'Failed to generate print audit', details: err.message });
+    }
+  });
+
+  // 8.2 Staff Re-spool / Print Trigger for Order (Requirement 3)
+  app.post('/api/orders/:id/respool-print', requireAuth, async (req, res) => {
+    try {
+      const restaurantId = (req as any).user?.restaurantId || (req.body.restaurantId as string);
+      const result = await printService.respoolOrderPrintJobs(req.params.id, restaurantId);
+      if (!result.success) {
+        // If no jobs existed, create them fresh
+        const ord = await orderService.getOrderById(req.params.id, restaurantId);
+        if (ord) {
+          const created = await printService.createPrintJobsForOrder(ord, { reason: 'manual', isReprint: true });
+          return res.json({
+            success: true,
+            jobs: created,
+            message: `Created and dispatched ${created.length} new print jobs to agent.`,
+          });
+        }
+        return res.status(404).json({ error: result.message || 'Order could not be re-spooled' });
+      }
+      res.json(result);
+    } catch (err: any) {
+      console.error('[PrintAudit API] Error re-spooling jobs:', err);
+      res.status(500).json({ error: 'Failed to re-spool print jobs', details: err.message });
     }
   });
 

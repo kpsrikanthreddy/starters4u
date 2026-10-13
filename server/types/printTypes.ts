@@ -113,24 +113,39 @@ export interface PrinterConfiguration {
 
 export interface PrintJob {
   id: string;
+  jobId?: string;
+  job_id?: string;
+  printJobId?: string;
   restaurantId: string;
+  restaurant_id?: string;
   branchId: string;
+  branch_id?: string;
   orderId: string;
+  order_id?: string;
+  orderNumber?: string;
+  order_number?: string;
   jobType: PrintJobType;
+  job_type?: PrintJobType;
   station: string;
+  rawStation?: string;
+  normalizedStation?: string;
+  stationAliases?: string[];
   idempotencyKey: string;
   status: PrintJobStatus;
   isReprint: boolean;
   claimedByDeviceId?: string | null;
+  claimed_by_device_id?: string | null;
   claimedAt?: string | null;
   printedAt?: string | null;
   failedAt?: string | null;
   errorMessage?: string | null;
   retryCount: number;
   maxRetries: number;
-  payload: KotTicketPayload | BillTicketPayload;
+  payload: KotTicketPayload | BillTicketPayload | any;
   createdAt: string;
+  created_at?: string;
   updatedAt: string;
+  updated_at?: string;
 }
 
 export interface PrintJobAttempt {

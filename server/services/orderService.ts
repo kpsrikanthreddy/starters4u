@@ -3,7 +3,7 @@ import { query, getClient, inMemoryDb, isPostgresRunning, isPostgresConfigured }
 import { Order, OrderStatus, OrderType, EntrySource, PaymentMethod, CartItem, CustomerDetails, CustomerLocationSource } from '../../src/types.js';
 import { findOrCreateCustomer } from './customerService.js';
 import { validateSignedToken } from './qrService.js';
-import { createPrintJobsForOrder } from './printService.js';
+import { createPrintJobsForOrder, normalizeStationName } from './printService.js';
 import {
   validateServiceMode,
   checkDeliveryServiceability,
@@ -282,6 +282,50 @@ export async function assembleOrderObject(
         }
       : undefined,
     statusHistory,
+    printJobs: await (async () => {
+      let printJobRecords: any[] = [];
+      if (isPostgresRunning()) {
+        try {
+          const pjRes = await query(
+            `SELECT id, job_type, station, status, claimed_by_device_id, created_at, claimed_at, printed_at, failed_at, error_message, retry_count
+             FROM print_jobs WHERE order_id::text = $1 ORDER BY created_at ASC`,
+            [orderRow.id]
+          );
+          printJobRecords = pjRes.rows;
+        } catch {
+          // non-fatal
+        }
+      } else {
+        printJobRecords = inMemoryDb.print_jobs.filter((j: any) => j.orderId === orderRow.id);
+      }
+
+      return printJobRecords.map((j: any) => {
+        const rawStatus = (j.status || 'PENDING').toUpperCase();
+        let displayStatus = 'queued';
+        if (rawStatus === 'PENDING') displayStatus = 'queued';
+        else if (rawStatus === 'CLAIMED') displayStatus = 'claimed';
+        else if (rawStatus === 'PRINTING') displayStatus = 'printing';
+        else if (rawStatus === 'PRINTED') displayStatus = 'printed';
+        else if (rawStatus === 'FAILED') displayStatus = 'failed';
+        else if (rawStatus === 'CANCELLED') displayStatus = 'skipped';
+
+        return {
+          id: j.id,
+          jobType: j.job_type || j.jobType,
+          station: j.station,
+          normalizedStation: normalizeStationName(j.station),
+          status: displayStatus,
+          rawStatus,
+          claimedByDeviceId: j.claimed_by_device_id || j.claimedByDeviceId || null,
+          createdAt: j.created_at ? new Date(j.created_at).toISOString() : undefined,
+          claimedAt: j.claimed_at ? new Date(j.claimed_at).toISOString() : null,
+          printedAt: j.printed_at ? new Date(j.printed_at).toISOString() : null,
+          failedAt: j.failed_at ? new Date(j.failed_at).toISOString() : null,
+          errorMessage: j.error_message || j.errorMessage || null,
+          retryCount: j.retry_count !== undefined ? j.retry_count : (j.retryCount || 0),
+        };
+      });
+    })(),
   };
 
   return orderObj;
@@ -895,7 +939,13 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
       });
 
       const assembled = await assembleOrderObject(insertedOrder, itemRows, histRes.rows, customerRecord);
-      if (assembled.status === 'confirmed' || assembled.paymentStatus === 'paid') {
+      // Requirement 3: Ensure newly placed orders create correct KOT/Bill print jobs without silent skipping
+      const shouldCreatePrintJobs =
+        assembled.paymentStatus === 'paid' ||
+        ['confirmed', 'accepted', 'placed'].includes(assembled.status) ||
+        ['dine_in', 'counter'].includes(assembled.orderType) ||
+        ['cod', 'cash'].includes(assembled.paymentMethod);
+      if (shouldCreatePrintJobs && !['cancelled', 'rejected'].includes(assembled.status)) {
         await createPrintJobsForOrder(assembled, {
           reason: assembled.paymentStatus === 'paid' ? 'online_paid' : 'confirmed',
         }).catch((err) => console.error('[OrderService] Error triggering print jobs on order creation:', err));
@@ -1057,7 +1107,12 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
   });
 
   const assembled = await assembleOrderObject(newOrderRow, insertedItemRows, [histRow], customerRecord);
-  if (assembled.status === 'confirmed' || assembled.paymentStatus === 'paid') {
+  const shouldCreatePrintJobs =
+    assembled.paymentStatus === 'paid' ||
+    ['confirmed', 'accepted', 'placed'].includes(assembled.status) ||
+    ['dine_in', 'counter'].includes(assembled.orderType) ||
+    ['cod', 'cash'].includes(assembled.paymentMethod);
+  if (shouldCreatePrintJobs && !['cancelled', 'rejected'].includes(assembled.status)) {
     await createPrintJobsForOrder(assembled, {
       reason: assembled.paymentStatus === 'paid' ? 'online_paid' : 'confirmed',
     }).catch((err) => console.error('[OrderService] Error triggering print jobs on in-memory order creation:', err));
@@ -1413,9 +1468,21 @@ export async function updateOrderStatus(
       }
 
       const updatedOrder = await getOrderById(order.id, restaurantId);
-      if (updatedOrder && newStatus === 'confirmed') {
+      const isConfirmedOrActive = [
+        'confirmed',
+        'accepted',
+        'baking',
+        'preparing',
+        'packing',
+        'ready',
+        'ready_for_pickup',
+        'out_for_delivery',
+        'delivered',
+        'completed',
+      ].includes(newStatus);
+      if (updatedOrder && isConfirmedOrActive) {
         await createPrintJobsForOrder(updatedOrder, { reason: 'confirmed' }).catch((err) =>
-          console.error('[OrderService] Error triggering print jobs on order confirm:', err)
+          console.error('[OrderService] Error triggering print jobs on order status update:', err)
         );
       }
 
@@ -1466,7 +1533,19 @@ export async function updateOrderStatus(
   }
 
   const inMemUpdated = await getOrderById(orderId, restaurantId);
-  if (inMemUpdated && newStatus === 'confirmed') {
+  const isConfirmedOrActiveInMem = [
+    'confirmed',
+    'accepted',
+    'baking',
+    'preparing',
+    'packing',
+    'ready',
+    'ready_for_pickup',
+    'out_for_delivery',
+    'delivered',
+    'completed',
+  ].includes(newStatus);
+  if (inMemUpdated && isConfirmedOrActiveInMem) {
     await createPrintJobsForOrder(inMemUpdated, { reason: 'confirmed' }).catch((err) =>
       console.error('[OrderService] Error triggering print jobs on order confirm in-memory:', err)
     );

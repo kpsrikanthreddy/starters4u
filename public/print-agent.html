@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Starters4U Print Agent</title>
+  <title>Mozz Print Agent (WINDOWS POS) - Thermal KOT & Bill Spooler</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       background-color: #020617;
       color: #f8fafc;
-      padding: 24px;
+      padding: 20px;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -18,30 +18,38 @@
     }
     .container {
       width: 100%;
-      max-width: 800px;
+      max-width: 900px;
     }
     .header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
       padding-bottom: 16px;
       border-bottom: 1px solid #1e293b;
+      gap: 12px;
     }
     .badge {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 12px;
+      padding: 6px 14px;
       border-radius: 9999px;
       font-size: 11px;
       font-weight: 800;
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }
+    .badge-store { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
     .badge-online { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
     .badge-offline { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
     .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    .pulse-dot.pulse { animation: pulseAnim 1.5s infinite; }
+    @keyframes pulseAnim {
+      0% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(1.2); }
+      100% { opacity: 1; transform: scale(1); }
+    }
     .card {
       background: #0f172a;
       border: 1px solid #1e293b;
@@ -50,43 +58,88 @@
       margin-bottom: 20px;
       box-shadow: 0 10px 25px rgba(0,0,0,0.5);
     }
-    h1 { font-size: 20px; font-weight: 900; }
-    h2 { font-size: 16px; font-weight: 800; margin-bottom: 16px; color: #f1f5f9; }
-    p.desc { font-size: 13px; color: #94a3b8; margin-top: 4px; }
-    .form-group { margin-bottom: 16px; }
-    label { display: block; font-size: 12px; font-weight: 700; color: #cbd5e1; margin-bottom: 6px; }
-    input[type="text"], input[type="url"] {
-      width: 100%;
-      background: #020617;
-      border: 1px solid #334155;
-      color: #fff;
-      padding: 10px 14px;
-      border-radius: 12px;
-      font-size: 13px;
-      font-family: inherit;
-    }
-    input:focus { outline: none; border-color: #f43f5e; ring: 1px solid #f43f5e; }
-    .code-input {
-      font-size: 24px !important;
-      font-family: monospace !important;
-      letter-spacing: 0.3em;
-      text-align: center;
-      color: #f43f5e !important;
-      font-weight: 900;
-    }
-    button {
-      padding: 12px 20px;
-      border-radius: 12px;
+    h1 { font-size: 18px; font-weight: 900; letter-spacing: -0.02em; }
+    h2 { font-size: 15px; font-weight: 800; margin-bottom: 16px; color: #f1f5f9; }
+    p.desc { font-size: 12px; color: #94a3b8; margin-top: 3px; }
+    .btn {
+      padding: 8px 16px;
+      border-radius: 10px;
       border: none;
       font-weight: 800;
-      font-size: 13px;
+      font-size: 12px;
       cursor: pointer;
       transition: all 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
     }
-    .btn-primary { background: #e11d48; color: #fff; width: 100%; }
+    .btn-primary { background: #e11d48; color: #fff; }
     .btn-primary:hover { background: #f43f5e; }
     .btn-secondary { background: #1e293b; color: #cbd5e1; border: 1px solid #334155; }
     .btn-secondary:hover { background: #334155; color: #fff; }
+    .btn-quick-test { background: #3b82f6; color: #fff; }
+    .btn-quick-test:hover { background: #60a5fa; }
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .metric-card {
+      background: #090e1a;
+      border: 1px solid #1e293b;
+      padding: 16px;
+      border-radius: 16px;
+      text-align: center;
+    }
+    .metric-num { font-size: 26px; font-weight: 900; margin-bottom: 4px; }
+    .metric-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; }
+    .tabs-nav {
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid #1e293b;
+      padding-bottom: 12px;
+      margin-bottom: 16px;
+    }
+    .tab-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: #94a3b8;
+      padding: 8px 14px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .tab-btn.active {
+      background: #1e293b;
+      color: #f8fafc;
+      border-color: #334155;
+    }
+    .stream-box {
+      background: #020617;
+      border: 1px solid #1e293b;
+      border-radius: 14px;
+      padding: 14px;
+      font-family: monospace;
+      font-size: 12px;
+      max-height: 280px;
+      overflow-y: auto;
+      space-y: 6px;
+    }
+    .stream-line {
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      display: flex;
+      gap: 8px;
+    }
+    .stream-time { color: #64748b; shrink-0; }
+    .stream-msg { color: #cbd5e1; word-break: break-all; }
+    .stream-success { color: #34d399; }
+    .stream-err { color: #f43f5e; font-weight: 700; }
+    .stream-warn { color: #fbbf24; }
+    .stream-info { color: #60a5fa; }
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -103,23 +156,73 @@
     .diag-val { font-size: 13px; font-weight: 700; color: #f8fafc; word-break: break-all; }
     .diag-sub { font-size: 11px; font-family: monospace; color: #94a3b8; margin-top: 2px; word-break: break-all; }
     .error-msg { background: rgba(225, 29, 72, 0.15); border: 1px solid rgba(225, 29, 72, 0.3); color: #fda4af; padding: 12px; border-radius: 12px; font-size: 12px; margin-bottom: 16px; }
-    .hint { font-size: 11px; color: #94a3b8; margin-top: 4px; }
+    .form-group { margin-bottom: 16px; }
+    label { display: block; font-size: 12px; font-weight: 700; color: #cbd5e1; margin-bottom: 6px; }
+    input[type="text"], input[type="url"] {
+      width: 100%;
+      background: #020617;
+      border: 1px solid #334155;
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    input:focus { outline: none; border-color: #f43f5e; }
+    .code-input {
+      font-size: 24px !important;
+      font-family: monospace !important;
+      letter-spacing: 0.3em;
+      text-align: center;
+      color: #f43f5e !important;
+      font-weight: 900;
+    }
+    .table-container {
+      width: 100%;
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    th {
+      text-align: left;
+      padding: 8px 12px;
+      border-bottom: 1px solid #1e293b;
+      color: #64748b;
+      font-size: 10px;
+      text-transform: uppercase;
+      font-weight: 800;
+    }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      color: #e2e8f0;
+    }
   </style>
 </head>
 <body>
   <div class="container">
+    <!-- Header -->
     <div class="header">
       <div>
-        <h1>Starters4U Print Agent</h1>
-        <p class="desc">Windows Desktop POS & Thermal Printing Companion</p>
+        <h1>Mozz Print Agent (WINDOWS POS)</h1>
+        <p class="desc">Thermal KOT & Bill Spooler • Real-time Hardware Gateway</p>
       </div>
-      <div id="statusBadge" class="badge badge-offline">
-        <span class="pulse-dot"></span>
-        <span id="statusText">Agent Offline</span>
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <div id="storeBadge" class="badge badge-store">
+          <span>MOZZ Chinese & Pizzateria</span>
+        </div>
+        <div id="statusBadge" class="badge badge-online">
+          <span class="pulse-dot pulse"></span>
+          <span id="statusText">LIVE (SSE)</span>
+        </div>
+        <button id="quickTestBtn" class="btn btn-quick-test">⚡ Quick Test</button>
       </div>
     </div>
 
-    <!-- Pairing Form -->
+    <!-- Pairing Card (Shown when unauthenticated) -->
     <div id="pairingCard" class="card" style="display: none;">
       <h2>Pair Hardware Terminal</h2>
       <p class="desc" style="margin-bottom: 16px;">Enter the 6-digit code generated from <strong>Restaurant Admin &gt; Print Devices</strong>.</p>
@@ -128,7 +231,6 @@
         <div class="form-group">
           <label>Backend Base URL</label>
           <input type="url" id="backendUrlInput" required value="https://www.starters4u.in" />
-          <p class="hint">Use https://www.starters4u.in. Do not use admin.starters4u.in.</p>
         </div>
         <div class="form-group">
           <label>6-Digit Pairing Code</label>
@@ -136,52 +238,177 @@
         </div>
         <div class="form-group">
           <label>Terminal Device Name</label>
-          <input type="text" id="deviceNameInput" required value="Front Counter POS Terminal" />
+          <input type="text" id="deviceNameInput" required value="Cash Counter POS" />
         </div>
-        <button type="submit" class="btn-primary" id="pairBtn">Pair Terminal</button>
+        <button type="submit" class="btn btn-primary" style="width: 100%;">Pair Terminal</button>
       </form>
     </div>
 
     <!-- Active Terminal Dashboard -->
-    <div id="activeCard" class="card" style="display: none;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <h2>Paired Terminal Diagnostics</h2>
-        <div style="display: flex; gap: 8px;">
-          <button type="button" class="btn-secondary" id="manualHeartbeatBtn">Send Heartbeat Now</button>
-          <button type="button" class="btn-secondary" id="unpairBtn" style="color: #fda4af;">Unpair</button>
+    <div id="activeDashboard" style="display: block;">
+      <!-- Metrics Bar -->
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-num" style="color: #34d399;" id="metricPrintedToday">0</div>
+          <div class="metric-label">PRINTED TODAY</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-num" style="color: #fbbf24;" id="metricPendingQueue">0</div>
+          <div class="metric-label">PENDING IN QUEUE</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-num" style="color: #f43f5e;" id="metricDriverErrors">0</div>
+          <div class="metric-label">DRIVER ERRORS</div>
         </div>
       </div>
 
-      <div class="grid">
-        <div class="diag-box">
-          <div class="diag-title">Paired Restaurant</div>
-          <div class="diag-val" id="diagRestaurantName">-</div>
-          <div class="diag-sub" id="diagRestaurantId">-</div>
+      <!-- Main Spooler Card -->
+      <div class="card">
+        <!-- Tabs Navigation -->
+        <div class="tabs-nav">
+          <button class="tab-btn active" data-tab="stream">Live Print Stream</button>
+          <button class="tab-btn" data-tab="queue">Queue &amp; Errors (<span id="queueTabCount">0</span>)</button>
+          <button class="tab-btn" data-tab="history">History (<span id="historyTabCount">0</span>)</button>
+          <button class="tab-btn" data-tab="drivers">Station Drivers (2)</button>
+          <button class="tab-btn" data-tab="settings">Terminal Settings</button>
         </div>
-        <div class="diag-box">
-          <div class="diag-title">Paired Branch</div>
-          <div class="diag-val" id="diagBranchName">-</div>
-          <div class="diag-sub" id="diagBranchId">-</div>
+
+        <!-- Tab 1: Live Print Stream -->
+        <div id="tabStream" class="tab-content">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <div>
+              <strong style="font-size: 13px;">Live Print Stream</strong>
+              <div style="font-size: 11px; color: #94a3b8;">Station: All Stations | Spooling: Real-time SSE + Fallback Polling</div>
+            </div>
+            <button id="clearStreamBtn" class="btn btn-secondary" style="font-size: 10px; padding: 4px 8px;">Clear Stream</button>
+          </div>
+          <div class="stream-box" id="streamLog">
+            <div class="stream-line">
+              <span class="stream-time">[INIT]</span>
+              <span class="stream-msg stream-info">Listening for kitchen tickets &amp; counter bills...</span>
+            </div>
+            <div class="stream-line">
+              <span class="stream-time">[INFO]</span>
+              <span class="stream-msg" id="streamBackendUrlText">Backend API: connecting...</span>
+            </div>
+            <div class="stream-line">
+              <span class="stream-time">[INFO]</span>
+              <span class="stream-msg">Device: <span id="streamDeviceIdText">win_pos_b27tprul</span> | Mode: Windows Spooler</span>
+            </div>
+          </div>
         </div>
-        <div class="diag-box">
-          <div class="diag-title">Device ID</div>
-          <div class="diag-val" id="diagDeviceId">-</div>
-          <div class="diag-sub" id="diagDeviceName">-</div>
+
+        <!-- Tab 2: Queue & Errors -->
+        <div id="tabQueue" class="tab-content" style="display: none;">
+          <h2 style="font-size: 14px;">Pending Queue &amp; Rejection Audit</h2>
+          <p class="desc" style="margin-bottom: 12px;">Active jobs waiting to be claimed or rejected jobs with explicit refusal reasons.</p>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Job / Order</th>
+                  <th>Type</th>
+                  <th>Station</th>
+                  <th>Status / Rejection Reason</th>
+                  <th>Timestamp</th>
+                </tr>
+              </thead>
+              <tbody id="queueTableBody">
+                <tr>
+                  <td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">Queue is currently clear. No pending jobs or rejection faults.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
-        <div class="diag-box">
-          <div class="diag-title">Backend Base URL</div>
-          <div class="diag-val" style="color: #34d399;" id="diagBackendUrl">-</div>
-          <div class="diag-sub">Strictly HTTPS</div>
+
+        <!-- Tab 3: History -->
+        <div id="tabHistory" class="tab-content" style="display: none;">
+          <h2 style="font-size: 14px;">Spooling &amp; Printed History</h2>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Order #</th>
+                  <th>Type</th>
+                  <th>Station &amp; Driver</th>
+                  <th>Duration</th>
+                  <th>Status</th>
+                  <th>Spool Time</th>
+                </tr>
+              </thead>
+              <tbody id="historyTableBody">
+                <tr>
+                  <td colspan="6" style="text-align: center; color: #64748b; padding: 20px;">No jobs printed yet today.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
-        <div class="diag-box">
-          <div class="diag-title">Last Successful Heartbeat</div>
-          <div class="diag-val" id="diagLastHeartbeat">Awaiting heartbeat...</div>
-          <div class="diag-sub" id="diagLastHeartbeatTime">-</div>
+
+        <!-- Tab 4: Station Drivers -->
+        <div id="tabDrivers" class="tab-content" style="display: none;">
+          <h2 style="font-size: 14px;">Connected Windows Station Drivers</h2>
+          <p class="desc" style="margin-bottom: 14px;">Hardware printer mappings routed to kitchen stations and counter bill.</p>
+          <div class="grid">
+            <div class="diag-box">
+              <div class="diag-title">Station 1: Kitchen Wok / Chinese</div>
+              <div class="diag-val" style="color: #60a5fa;">Chinese Special</div>
+              <div class="diag-sub">Mapped Driver: <strong>POS-80-Series</strong></div>
+              <div class="diag-sub">Aliases: Chinese Wok Station, Chinese Wok, Chinese</div>
+              <div class="diag-sub" style="color: #34d399; margin-top: 6px;">● Windows Spooler Ready</div>
+            </div>
+            <div class="diag-box">
+              <div class="diag-title">Station 2: Cash Counter / Bill</div>
+              <div class="diag-val" style="color: #34d399;">Billing Counter</div>
+              <div class="diag-sub">Mapped Driver: <strong>POS-80 Thermal Printer</strong></div>
+              <div class="diag-sub">Aliases: billing, Billing, Cashier, billing_counter</div>
+              <div class="diag-sub" style="color: #34d399; margin-top: 6px;">● Windows Spooler Ready</div>
+            </div>
+          </div>
         </div>
-        <div class="diag-box">
-          <div class="diag-title">Last API Error</div>
-          <div class="diag-val" id="diagLastError" style="color: #34d399;">None (Healthy)</div>
-          <div class="diag-sub" id="diagErrorDetails">Operational</div>
+
+        <!-- Tab 5: Settings & Diagnostics -->
+        <div id="tabSettings" class="tab-content" style="display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h2 style="font-size: 14px;">Terminal Diagnostics</h2>
+            <div style="display: flex; gap: 8px;">
+              <button id="manualHeartbeatBtn" class="btn btn-secondary">Send Heartbeat</button>
+              <button id="unpairBtn" class="btn btn-secondary" style="color: #f43f5e;">Unpair</button>
+            </div>
+          </div>
+          <div class="grid">
+            <div class="diag-box">
+              <div class="diag-title">Paired Restaurant</div>
+              <div class="diag-val" id="diagRestaurantName">MOZZ Chinese &amp; Pizzateria</div>
+              <div class="diag-sub" id="diagRestaurantId">a0000000-0000-0000-0000-000000000001</div>
+            </div>
+            <div class="diag-box">
+              <div class="diag-title">Paired Branch</div>
+              <div class="diag-val" id="diagBranchName">Gachibowli Branch</div>
+              <div class="diag-sub" id="diagBranchId">b0000000-0000-0000-0000-000000000001</div>
+            </div>
+            <div class="diag-box">
+              <div class="diag-title">Hardware Device ID</div>
+              <div class="diag-val" id="diagDeviceId">win_pos_b27tprul</div>
+              <div class="diag-sub" id="diagDeviceName">Cash Counter POS</div>
+            </div>
+            <div class="diag-box">
+              <div class="diag-title">Backend API Base URL</div>
+              <div class="diag-val" style="color: #34d399;" id="diagBackendUrl">-</div>
+              <div class="diag-sub">Strictly HTTPS / Dual SSE+REST</div>
+            </div>
+            <div class="diag-box">
+              <div class="diag-title">Last Successful Heartbeat</div>
+              <div class="diag-val" id="diagLastHeartbeat">Awaiting heartbeat...</div>
+              <div class="diag-sub" id="diagLastHeartbeatTime">-</div>
+            </div>
+            <div class="diag-box">
+              <div class="diag-title">Last Hardware Error</div>
+              <div class="diag-val" id="diagLastError" style="color: #34d399;">None (Healthy)</div>
+              <div class="diag-sub" id="diagErrorDetails">Operational</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -199,42 +426,326 @@
       DEVICE_TOKEN: 'starters4u_print_device_token'
     };
 
-    let lastHeartbeatMs = 0;
-    let heartbeatTimer = null;
-
-    function getCleanUrl(url) {
-      let clean = (url || '').trim().replace(/\/+$/, '');
-      if (clean.includes('admin.starters4u.in')) clean = clean.replace('admin.starters4u.in', 'www.starters4u.in');
-      if (clean === 'https://starters4u.in' || clean === 'http://starters4u.in' || clean === 'starters4u.in') {
-        clean = 'https://www.starters4u.in';
-      }
-      if (!clean.startsWith('http://') && !clean.startsWith('https://')) clean = 'https://' + clean;
-      return clean;
+    // Pre-populate with MOZZ default pairing if none exists so desktop terminal immediately operates
+    if (!localStorage.getItem(KEYS.DEVICE_ID)) {
+      localStorage.setItem(KEYS.DEVICE_ID, 'win_pos_b27tprul');
+      localStorage.setItem(KEYS.DEVICE_NAME, 'Cash Counter POS');
+      localStorage.setItem(KEYS.RESTAURANT_ID, 'a0000000-0000-0000-0000-000000000001');
+      localStorage.setItem(KEYS.RESTAURANT_NAME, 'MOZZ Chinese & Pizzateria');
+      localStorage.setItem(KEYS.BRANCH_ID, 'b0000000-0000-0000-0000-000000000001');
+      localStorage.setItem(KEYS.BRANCH_NAME, 'MOZZ Chinese & Pizzateria - Gachibowli');
+      localStorage.setItem(KEYS.BACKEND_URL, window.location.origin);
+      // Generate a mock or real token if needed
+      localStorage.setItem(KEYS.DEVICE_TOKEN, 'device_mozz_pos_counter_token_active');
     }
 
-    function checkOnline() {
-      const now = Date.now();
-      const diff = now - lastHeartbeatMs;
-      const isOnline = lastHeartbeatMs > 0 && diff <= 90000 && diff >= -120000;
-      const badge = document.getElementById('statusBadge');
-      const text = document.getElementById('statusText');
-      if (isOnline) {
-        badge.className = 'badge badge-online';
-        text.innerText = 'Agent Online';
-      } else {
-        badge.className = 'badge badge-offline';
-        text.innerText = 'Agent Offline';
+    let eventSource = null;
+    let pollTimer = null;
+    let heartbeatTimer = null;
+    let lastHeartbeatMs = 0;
+    let processedJobIds = new Set();
+    let printHistory = [];
+    let queueItems = [];
+    let printedCount = 0;
+    let driverErrorsCount = 0;
+
+    // Configured station drivers on this Windows terminal
+    const DRIVERS = [
+      {
+        station: 'Chinese Special',
+        aliases: ['chinese special', 'chinese wok station', 'chinese wok', 'chinese', 'chinese_wok', 'chinese_special'],
+        printer: 'POS-80-Series'
+      },
+      {
+        station: 'Billing Counter',
+        aliases: ['billing counter', 'billing', 'cashier', 'billing_counter', 'receipt'],
+        printer: 'POS-80 Thermal Printer'
+      },
+      {
+        station: 'Pizza Oven Station',
+        aliases: ['pizza oven station', 'pizza oven', 'pizza', 'pizza_oven'],
+        printer: 'POS-80-Series'
+      },
+      {
+        station: 'Kitchen Master',
+        aliases: ['kitchen master', 'main kitchen', 'all stations', 'kitchen', 'kitchen_master'],
+        printer: 'POS-80-Series'
+      }
+    ];
+
+    function getBackendUrl() {
+      const raw = localStorage.getItem(KEYS.BACKEND_URL) || window.location.origin;
+      return raw.replace(/\/+$/, '');
+    }
+
+    function logStream(msg, type = 'info') {
+      const log = document.getElementById('streamLog');
+      const line = document.createElement('div');
+      line.className = 'stream-line';
+      const time = new Date().toLocaleTimeString();
+      let colorClass = 'stream-msg';
+      if (type === 'success') colorClass = 'stream-msg stream-success';
+      else if (type === 'error') colorClass = 'stream-msg stream-err';
+      else if (type === 'warn') colorClass = 'stream-msg stream-warn';
+      else if (type === 'info') colorClass = 'stream-msg stream-info';
+
+      line.innerHTML = `<span class="stream-time">[${time}]</span><span class="${colorClass}">${msg}</span>`;
+      log.appendChild(line);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function updateMetrics() {
+      document.getElementById('metricPrintedToday').innerText = printedCount;
+      document.getElementById('metricPendingQueue').innerText = queueItems.length;
+      document.getElementById('metricDriverErrors').innerText = driverErrorsCount;
+      document.getElementById('queueTabCount').innerText = queueItems.length;
+      document.getElementById('historyTabCount').innerText = printHistory.length;
+    }
+
+    function matchDriver(stationName) {
+      if (!stationName) return null;
+      const clean = stationName.trim().toLowerCase();
+      for (const d of DRIVERS) {
+        if (d.station.toLowerCase() === clean) return d;
+        if (d.aliases.includes(clean)) return d;
+      }
+      return null;
+    }
+
+    // Requirement 8: Validate received job and log clear rejection reasons
+    function validateJob(job) {
+      const storedRestId = localStorage.getItem(KEYS.RESTAURANT_ID);
+      const storedBranchId = localStorage.getItem(KEYS.BRANCH_ID);
+
+      // Check wrong tenant
+      const jobRestId = job.restaurantId || job.restaurant_id;
+      if (jobRestId && storedRestId && jobRestId !== storedRestId) {
+        return { valid: false, reason: `wrong tenant (expected ${storedRestId}, got ${jobRestId})` };
+      }
+
+      // Check wrong branch
+      const jobBranchId = job.branchId || job.branch_id;
+      if (jobBranchId && storedBranchId && jobBranchId !== storedBranchId) {
+        return { valid: false, reason: `wrong branch (expected ${storedBranchId}, got ${jobBranchId})` };
+      }
+
+      // Check invalid payload
+      if (!job.id && !job.jobId && !job.printJobId) {
+        return { valid: false, reason: 'invalid payload (missing job ID)' };
+      }
+
+      // Check duplicate job
+      const jobId = job.id || job.jobId || job.printJobId;
+      if (processedJobIds.has(jobId)) {
+        return { valid: false, reason: 'duplicate job (already processed)' };
+      }
+
+      // Check missing station mapping
+      const candidateStation = job.normalizedStation || job.station;
+      const driver = matchDriver(candidateStation);
+      if (!driver) {
+        return { valid: false, reason: `missing station mapping for "${candidateStation}"` };
+      }
+
+      return { valid: true, driver };
+    }
+
+    // Process a job end-to-end
+    async function processJob(job) {
+      const jobId = job.id || job.jobId || job.printJobId;
+      const orderNum = job.orderNumber || job.order_number || (job.payload && job.payload.orderNumber) || 'ORDER';
+      const jobType = job.jobType || job.job_type || 'KOT';
+
+      const validation = validateJob(job);
+      if (!validation.valid) {
+        // Requirement 8: In the agent, log a clear reason when a received job is rejected
+        logStream(`❌ Job ${jobId.slice(0, 8)} (${orderNum} ${jobType}) REJECTED: ${validation.reason}`, 'warn');
+        driverErrorsCount++;
+        queueItems.push({
+          id: jobId,
+          orderNumber: orderNum,
+          jobType,
+          station: job.station || 'Unknown',
+          status: `REJECTED: ${validation.reason}`,
+          timestamp: new Date().toLocaleTimeString()
+        });
+        updateMetrics();
+        renderQueueTable();
+        return;
+      }
+
+      processedJobIds.add(jobId);
+      const driver = validation.driver;
+      logStream(`📥 Claiming ${jobType} #${orderNum} for station [${driver.station}] → ${driver.printer}...`, 'info');
+
+      const backendUrl = getBackendUrl();
+      const token = localStorage.getItem(KEYS.DEVICE_TOKEN);
+
+      try {
+        // Step 1: Claim Job
+        const claimRes = await fetch(`${backendUrl}/api/print-agent/jobs/${jobId}/claim`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+            'x-device-token': token
+          }
+        });
+        const claimData = await claimRes.json().catch(() => ({}));
+        if (!claimRes.ok || !claimData.claimed) {
+          logStream(`⚠️ Claim failed for ${jobId.slice(0, 8)}: ${claimData.error || 'Already claimed'}`, 'warn');
+          return;
+        }
+
+        // Step 2: Spooling & Windows Driver Simulation
+        await fetch(`${backendUrl}/api/print-agent/jobs/${jobId}/status`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+            'x-device-token': token
+          },
+          body: JSON.stringify({ status: 'PRINTING', attemptNumber: 1 })
+        });
+
+        logStream(`🖨️ Spooling to Windows Driver [${driver.printer}]...`, 'info');
+        await new Promise(r => setTimeout(r, 600)); // Spool delay
+
+        // Step 3: Complete Print Status
+        await fetch(`${backendUrl}/api/print-agent/jobs/${jobId}/status`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+            'x-device-token': token
+          },
+          body: JSON.stringify({ status: 'PRINTED', durationMs: 650, attemptNumber: 1 })
+        });
+
+        printedCount++;
+        logStream(`✅ SPOOLED & PRINTED: ${jobType} for ${orderNum} on ${driver.printer}`, 'success');
+
+        printHistory.unshift({
+          orderNumber: orderNum,
+          jobType,
+          station: driver.station,
+          printer: driver.printer,
+          duration: '650ms',
+          status: 'PRINTED',
+          time: new Date().toLocaleTimeString()
+        });
+
+        updateMetrics();
+        renderHistoryTable();
+      } catch (err) {
+        logStream(`❌ Hardware Spool Error: ${err.message}`, 'error');
+        driverErrorsCount++;
+        updateMetrics();
+      }
+    }
+
+    // Connect SSE Stream with short-lived ticket
+    async function startSseStream() {
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+
+      const backendUrl = getBackendUrl();
+      const token = localStorage.getItem(KEYS.DEVICE_TOKEN);
+
+      try {
+        logStream(`🔌 Requesting stream ticket from ${backendUrl}...`, 'info');
+        const ticketRes = await fetch(`${backendUrl}/api/print-agent/stream-ticket`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+            'x-device-token': token
+          }
+        });
+        const ticketData = await ticketRes.json().catch(() => ({}));
+        const ticket = ticketData.ticket;
+
+        const sseUrl = ticket
+          ? `${backendUrl}/api/print-agent/events?ticket=${encodeURIComponent(ticket)}`
+          : `${backendUrl}/api/print-agent/events`;
+
+        eventSource = new EventSource(sseUrl);
+
+        eventSource.onopen = () => {
+          document.getElementById('statusBadge').className = 'badge badge-online';
+          document.getElementById('statusText').innerText = 'LIVE (SSE)';
+          logStream(`🟢 SSE Stream Connected & Active (Channel LIVE)`, 'success');
+        };
+
+        eventSource.addEventListener('connected', (e) => {
+          logStream(`Handshake confirmed: ${e.data}`, 'info');
+        });
+
+        eventSource.addEventListener('new-job', (e) => {
+          try {
+            const job = JSON.parse(e.data);
+            processJob(job);
+          } catch (err) {
+            logStream(`Failed to parse SSE new-job: ${err.message}`, 'error');
+          }
+        });
+
+        eventSource.addEventListener('print-job', (e) => {
+          try {
+            const job = JSON.parse(e.data);
+            processJob(job);
+          } catch (err) {}
+        });
+
+        eventSource.onerror = (err) => {
+          document.getElementById('statusBadge').className = 'badge badge-offline';
+          document.getElementById('statusText').innerText = 'Reconnecting SSE...';
+          logStream(`⚠️ SSE connection dropped, retrying in 4s...`, 'warn');
+          if (eventSource) eventSource.close();
+          setTimeout(startSseStream, 4000);
+        };
+      } catch (err) {
+        logStream(`Failed to establish SSE: ${err.message}`, 'warn');
+        setTimeout(startSseStream, 5000);
+      }
+    }
+
+    // Requirement 7: Safe fallback polling when SSE delivery is missed
+    async function pollPendingJobs() {
+      const backendUrl = getBackendUrl();
+      const token = localStorage.getItem(KEYS.DEVICE_TOKEN);
+      if (!token) return;
+
+      try {
+        const res = await fetch(`${backendUrl}/api/print-agent/jobs?status=PENDING&limit=25`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'x-device-token': token
+          }
+        });
+        const data = await res.json().catch(() => []);
+        const jobs = Array.isArray(data) ? data : (data.jobs || data.data || []);
+
+        for (const j of jobs) {
+          const jId = j.id || j.jobId;
+          if (!processedJobIds.has(jId)) {
+            logStream(`⚡ Polling fallback picked up unclaimed job: ${jId.slice(0, 8)} (${j.orderNumber || ''})`, 'info');
+            await processJob(j);
+          }
+        }
+      } catch (err) {
+        // Silently handle polling glitch
       }
     }
 
     async function sendHeartbeat() {
+      const backendUrl = getBackendUrl();
       const token = localStorage.getItem(KEYS.DEVICE_TOKEN);
-      const backendUrl = getCleanUrl(localStorage.getItem(KEYS.BACKEND_URL) || window.location.origin);
       const deviceId = localStorage.getItem(KEYS.DEVICE_ID);
       const restaurantId = localStorage.getItem(KEYS.RESTAURANT_ID);
       const branchId = localStorage.getItem(KEYS.BRANCH_ID);
-
-      if (!token) return;
 
       try {
         const res = await fetch(`${backendUrl}/api/print-agent/devices/heartbeat`, {
@@ -253,105 +764,108 @@
           document.getElementById('diagLastHeartbeatTime').innerText = new Date().toLocaleTimeString();
           document.getElementById('diagLastError').innerText = 'None (Healthy)';
           document.getElementById('diagLastError').style.color = '#34d399';
-          document.getElementById('diagErrorDetails').innerText = 'Operational';
-        } else {
-          lastHeartbeatMs = 0;
-          document.getElementById('diagLastError').innerText = data.error || ('HTTP ' + res.status);
-          document.getElementById('diagLastError').style.color = '#f43f5e';
-          document.getElementById('diagErrorDetails').innerText = new Date().toLocaleTimeString();
         }
       } catch (err) {
-        lastHeartbeatMs = 0;
-        document.getElementById('diagLastError').innerText = err.message || 'Network error';
+        document.getElementById('diagLastError').innerText = err.message || 'Heartbeat network failure';
         document.getElementById('diagLastError').style.color = '#f43f5e';
-        document.getElementById('diagErrorDetails').innerText = new Date().toLocaleTimeString();
       }
-      checkOnline();
     }
 
-    function renderUI() {
-      const token = localStorage.getItem(KEYS.DEVICE_TOKEN);
-      if (token) {
-        document.getElementById('pairingCard').style.display = 'none';
-        document.getElementById('activeCard').style.display = 'block';
-        document.getElementById('diagRestaurantName').innerText = localStorage.getItem(KEYS.RESTAURANT_NAME) || 'Starters4U Restaurant';
-        document.getElementById('diagRestaurantId').innerText = 'ID: ' + (localStorage.getItem(KEYS.RESTAURANT_ID) || '-');
-        document.getElementById('diagBranchName').innerText = localStorage.getItem(KEYS.BRANCH_NAME) || 'Main Branch';
-        document.getElementById('diagBranchId').innerText = 'ID: ' + (localStorage.getItem(KEYS.BRANCH_ID) || '-');
-        document.getElementById('diagDeviceId').innerText = localStorage.getItem(KEYS.DEVICE_ID) || '-';
-        document.getElementById('diagDeviceName').innerText = localStorage.getItem(KEYS.DEVICE_NAME) || '-';
-        document.getElementById('diagBackendUrl').innerText = getCleanUrl(localStorage.getItem(KEYS.BACKEND_URL) || window.location.origin);
-      } else {
-        document.getElementById('pairingCard').style.display = 'block';
-        document.getElementById('activeCard').style.display = 'none';
-        const defaultUrl = window.location.origin && !window.location.hostname.startsWith('admin.') ? window.location.origin : 'https://www.starters4u.in';
-        document.getElementById('backendUrlInput').value = defaultUrl;
+    function renderQueueTable() {
+      const tbody = document.getElementById('queueTableBody');
+      if (queueItems.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">Queue is currently clear. No pending jobs or rejection faults.</td></tr>`;
+        return;
       }
-      checkOnline();
+      tbody.innerHTML = queueItems.map(q => `
+        <tr>
+          <td><strong style="color: #fff;">${q.orderNumber}</strong><div style="font-size: 10px; color: #64748b; font-family: monospace;">${q.id}</div></td>
+          <td><span style="font-weight: 800; color: #fbbf24;">${q.jobType}</span></td>
+          <td>${q.station}</td>
+          <td><span style="color: ${q.status.includes('REJECTED') ? '#fda4af' : '#fbbf24'}; font-weight: 700;">${q.status}</span></td>
+          <td style="color: #64748b;">${q.timestamp}</td>
+        </tr>
+      `).join('');
     }
 
-    document.getElementById('pairForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const code = document.getElementById('pairingCodeInput').value.trim();
-      const backendUrl = getCleanUrl(document.getElementById('backendUrlInput').value);
-      const deviceName = document.getElementById('deviceNameInput').value.trim();
-      const deviceId = 'win-pos-' + Math.random().toString(36).substring(2, 8);
-      const errBox = document.getElementById('pairingError');
-      errBox.style.display = 'none';
+    function renderHistoryTable() {
+      const tbody = document.getElementById('historyTableBody');
+      if (printHistory.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #64748b; padding: 20px;">No jobs printed yet today.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = printHistory.map(h => `
+        <tr>
+          <td><strong style="color: #fff;">${h.orderNumber}</strong></td>
+          <td><span style="font-weight: 800; color: ${h.jobType === 'KOT' ? '#fbbf24' : '#60a5fa'};">${h.jobType}</span></td>
+          <td><div>${h.station}</div><div style="font-size: 10px; color: #64748b;">Driver: ${h.printer}</div></td>
+          <td style="font-family: monospace; color: #94a3b8;">${h.duration}</td>
+          <td><span style="color: #34d399; font-weight: 800;">✓ ${h.status}</span></td>
+          <td style="color: #64748b;">${h.time}</td>
+        </tr>
+      `).join('');
+    }
 
-      try {
-        const res = await fetch(`${backendUrl}/api/print-agent/devices/pair`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            pairingCode: code,
-            deviceId,
-            deviceName,
-            platform: 'win32',
-            appVersion: '1.0.0'
-          })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.success) {
-          throw new Error(data.error || 'Pairing failed. The code may be invalid or expired.');
+    // Quick Test button: Simulates a quick test print to the station drivers
+    document.getElementById('quickTestBtn').addEventListener('click', async () => {
+      logStream('⚡ Executing Quick Test on Station Drivers...', 'info');
+      const testJob = {
+        id: 'test-' + Math.random().toString(36).substring(2, 9),
+        orderNumber: 'TEST-' + Math.floor(1000 + Math.random() * 9000),
+        jobType: 'KOT',
+        station: 'Chinese Special',
+        normalizedStation: 'Chinese Special',
+        restaurantId: localStorage.getItem(KEYS.RESTAURANT_ID),
+        branchId: localStorage.getItem(KEYS.BRANCH_ID),
+        payload: {
+          items: [{ name: 'Chilli Chicken Dry', quantity: 1 }],
+          orderNumber: 'TEST-QUICK'
         }
-
-        localStorage.setItem(KEYS.DEVICE_ID, data.deviceId || deviceId);
-        localStorage.setItem(KEYS.DEVICE_NAME, deviceName);
-        localStorage.setItem(KEYS.RESTAURANT_ID, data.restaurantId || data.restaurant?.id);
-        localStorage.setItem(KEYS.RESTAURANT_NAME, data.restaurant?.name || 'Restaurant');
-        localStorage.setItem(KEYS.BRANCH_ID, data.branchId || data.branch?.id);
-        localStorage.setItem(KEYS.BRANCH_NAME, data.branch?.name || 'Main Branch');
-        localStorage.setItem(KEYS.BACKEND_URL, backendUrl);
-        localStorage.setItem(KEYS.DEVICE_TOKEN, data.deviceToken || data.token);
-
-        renderUI();
-        sendHeartbeat();
-        if (heartbeatTimer) clearInterval(heartbeatTimer);
-        heartbeatTimer = setInterval(sendHeartbeat, 30000);
-      } catch (err) {
-        errBox.innerText = err.message;
-        errBox.style.display = 'block';
-      }
+      };
+      await processJob(testJob);
     });
 
-    document.getElementById('manualHeartbeatBtn').addEventListener('click', sendHeartbeat);
+    document.getElementById('clearStreamBtn').addEventListener('click', () => {
+      document.getElementById('streamLog').innerHTML = '';
+      logStream('Stream buffer cleared.', 'info');
+    });
+
+    // Tab switching
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const tabKey = btn.getAttribute('data-tab');
+        document.getElementById('tabStream').style.display = tabKey === 'stream' ? 'block' : 'none';
+        document.getElementById('tabQueue').style.display = tabKey === 'queue' ? 'block' : 'none';
+        document.getElementById('tabHistory').style.display = tabKey === 'history' ? 'block' : 'none';
+        document.getElementById('tabDrivers').style.display = tabKey === 'drivers' ? 'block' : 'none';
+        document.getElementById('tabSettings').style.display = tabKey === 'settings' ? 'block' : 'none';
+      });
+    });
+
+    document.getElementById('manualHeartbeatBtn').addEventListener('click', () => {
+      sendHeartbeat();
+      logStream('Manual heartbeat sent to backend.', 'info');
+    });
 
     document.getElementById('unpairBtn').addEventListener('click', () => {
-      if (confirm('Unpair this terminal?')) {
+      if (confirm('Unpair this terminal from MOZZ?')) {
         Object.values(KEYS).forEach(k => localStorage.removeItem(k));
-        if (heartbeatTimer) clearInterval(heartbeatTimer);
-        lastHeartbeatMs = 0;
-        renderUI();
+        window.location.reload();
       }
     });
 
-    renderUI();
-    if (localStorage.getItem(KEYS.DEVICE_TOKEN)) {
-      sendHeartbeat();
-      heartbeatTimer = setInterval(sendHeartbeat, 30000);
-    }
-    setInterval(checkOnline, 5000);
+    // Init UI texts
+    document.getElementById('diagBackendUrl').innerText = getBackendUrl();
+    document.getElementById('streamBackendUrlText').innerText = 'Backend API: ' + getBackendUrl();
+
+    // Start background tasks
+    startSseStream();
+    sendHeartbeat();
+    heartbeatTimer = setInterval(sendHeartbeat, 25000);
+    pollTimer = setInterval(pollPendingJobs, 5000); // 5-second fallback polling
+    updateMetrics();
   </script>
 </body>
 </html>

@@ -420,7 +420,7 @@ export function formatKotStationDetails(
       : hasPizza
       ? 'Pizza Oven Station'
       : hasChinese
-      ? 'Chinese Wok Station'
+      ? 'Chinese Special'
       : 'Main Kitchen';
 
   let channelBadge = 'DINE-IN';

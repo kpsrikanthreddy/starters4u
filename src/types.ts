@@ -164,12 +164,48 @@ export interface Order {
   settledAt?: string;
   estimatedDeliveryTimeMinutes: number;
   kotNumber?: string;
-  kotStation?: 'Pizza Oven Station' | 'Chinese Wok Station' | 'All Stations';
+  kotStation?: 'Chinese Special' | 'Pizza Oven Station' | 'Chinese Wok Station' | 'Main Kitchen' | 'Kitchen Master' | 'All Stations' | string;
   waiterName?: string;
   kotPrintCount?: number;
   receiptPrintCount?: number;
   confirmedAt?: string;
   completedAt?: string;
+  printJobs?: Array<{
+    id: string;
+    jobType: 'KOT' | 'BILL';
+    station: string;
+    normalizedStation?: string;
+    mappedPrinter?: string;
+    status: 'queued' | 'sent' | 'claimed' | 'printing' | 'printed' | 'failed' | 'skipped' | string;
+    rawStatus?: string;
+    claimedByDeviceId?: string | null;
+    claimedByDeviceName?: string | null;
+    createdAt?: string;
+    claimedAt?: string | null;
+    printedAt?: string | null;
+    failedAt?: string | null;
+    errorMessage?: string | null;
+    retryCount?: number;
+  }>;
+  printDeliveryAudit?: {
+    orderId: string;
+    orderNumber: string;
+    restaurantId: string;
+    restaurantName: string;
+    branchId: string;
+    branchName: string;
+    kotEligible: boolean;
+    kotReason: string;
+    billEligible: boolean;
+    billReason: string;
+    pairedDevice?: {
+      id: string;
+      deviceId: string;
+      deviceName: string;
+      isOnline: boolean;
+      lastSeenAt?: string;
+    } | null;
+  };
   feedbackRequest?: {
     id?: string;
     status: 'SCHEDULED' | 'SENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED' | 'RESPONDED';
