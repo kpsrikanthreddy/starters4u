@@ -279,6 +279,10 @@ export async function assembleOrderObject(
           feedbackRating: feedbackRecord.feedback_rating || undefined,
           feedbackReceivedAt: feedbackRecord.feedback_received_at ? new Date(feedbackRecord.feedback_received_at).toISOString() : undefined,
           feedbackReplyMessageId: feedbackRecord.feedback_reply_message_id || undefined,
+          customerComment: feedbackRecord.customer_comment || undefined,
+          commentReceivedAt: feedbackRecord.comment_received_at ? new Date(feedbackRecord.comment_received_at).toISOString() : undefined,
+          ownerAlertStatus: feedbackRecord.owner_alert_status || undefined,
+          ownerAlertSentAt: feedbackRecord.owner_alert_sent_at ? new Date(feedbackRecord.owner_alert_sent_at).toISOString() : undefined,
         }
       : undefined,
     statusHistory,

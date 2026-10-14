@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { query, inMemoryDb, isPostgresRunning, isPostgresConfigured } from '../db.js';
 import { getRestaurantSettings } from './tenantService.js';
+import { realtimeNotificationService } from './realtimeNotificationService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -40,8 +41,33 @@ export interface FeedbackRequestRecord {
   feedback_rating?: FeedbackRating | null;
   feedback_received_at?: string | null;
   feedback_reply_message_id?: string | null;
+  customer_comment?: string | null;
+  comment_received_at?: string | null;
+  owner_alert_status?: 'PENDING' | 'SENT' | 'DELIVERED' | 'FAILED' | null;
+  owner_alert_sent_at?: string | null;
+  owner_alert_whatsapp_message_id?: string | null;
+  owner_alert_error?: string | null;
+  acknowledgement_message_id?: string | null;
   created_at: string;
   updated_at?: string;
+}
+
+export function formatFeedbackDateTime(isoDate?: string | Date | null, timeZone: string = 'Asia/Kolkata'): string {
+  if (!isoDate) return '';
+  const date = typeof isoDate === 'string' ? new Date(isoDate) : isoDate;
+  if (isNaN(date.getTime())) return '';
+  try {
+    return new Intl.DateTimeFormat('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: timeZone || 'Asia/Kolkata',
+    }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
 }
 
 // In-memory set to prevent duplicate handling of webhook reply messages and repeated duplicate acknowledgements

@@ -216,6 +216,10 @@ export interface Order {
     feedbackRating?: 'GOOD' | 'AVERAGE' | 'BAD' | null;
     feedbackReceivedAt?: string;
     feedbackReplyMessageId?: string;
+    customerComment?: string;
+    commentReceivedAt?: string;
+    ownerAlertStatus?: 'PENDING' | 'SENT' | 'DELIVERED' | 'FAILED';
+    ownerAlertSentAt?: string;
   };
   driverDetails?: {
     name: string;

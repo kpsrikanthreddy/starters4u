@@ -37,6 +37,10 @@ import { requireAuth, requireRole, verifyAuthToken } from './middleware/authMidd
 import { requireRestaurantTenant, requireRestaurantRole, requirePlatformAdmin } from './middleware/tenantMiddleware.js';
 import { requireDeviceAuth } from './middleware/deviceAuthMiddleware.js';
 import { getIpHashSecret } from './config.js';
+import {
+  handleWhatsAppVerification,
+  handleWhatsAppWebhookEvent,
+} from './services/whatsappWebhookService.js';
 
 dotenv.config();
 
@@ -127,6 +131,10 @@ export function createApp(): express.Application {
 
   // Ensure DB and default users are initialized before processing API requests
   app.use(async (req, _res, next) => {
+    // Fast-path: Never wait on database initialization for Meta WhatsApp webhook verification
+    if (req.method === 'GET' && (req.path === '/api/whatsapp/webhook' || req.path === '/whatsapp/webhook' || req.path.includes('/whatsapp/webhook'))) {
+      return next();
+    }
     if (req.path.startsWith('/api')) {
       try {
         await ensureInitialized();
@@ -2732,112 +2740,22 @@ export function createApp(): express.Application {
     }
   );
 
-  // Meta WhatsApp Cloud API Webhook Verification
-  app.get(['/api/whatsapp/webhook', '/api/webhooks/whatsapp', '/api/webhook/whatsapp'], (req, res) => {
-    const mode = req.query['hub.mode'];
-    const token = req.query['hub.verify_token'];
-    const challenge = req.query['hub.challenge'];
+  // Meta WhatsApp Cloud API Webhook Verification (GET) and Event Processing (POST)
+  const whatsappWebhookPaths = [
+    '/api/whatsapp/webhook',
+    '/api/whatsapp/webhook/',
+    '/whatsapp/webhook',
+    '/whatsapp/webhook/',
+    '/api/webhooks/whatsapp',
+    '/api/webhook/whatsapp',
+  ];
 
-    const verifyToken =
-      process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ||
-      process.env.WHATSAPP_VERIFY_TOKEN ||
-      'starters4u_feedback_webhook_secret';
-
-    if (mode === 'subscribe' && token === verifyToken) {
-      console.info('[WhatsAppWebhook] Webhook verified successfully with Meta.');
-      return res.status(200).send(challenge);
-    }
-    return res.status(403).send('Forbidden: Verification token mismatch');
+  app.get(whatsappWebhookPaths, (req, res) => {
+    return handleWhatsAppVerification(req, res);
   });
 
-  // Meta WhatsApp Cloud API Webhook Event Handler (Status updates & Customer quick replies)
-  app.post(['/api/whatsapp/webhook', '/api/webhooks/whatsapp', '/api/webhook/whatsapp'], async (req, res) => {
-    try {
-      const appSecret = process.env.WHATSAPP_APP_SECRET || process.env.META_APP_SECRET;
-      const signature = req.headers['x-hub-signature-256'] as string;
-
-      // Optional Meta signature verification if WHATSAPP_APP_SECRET is configured
-      if (appSecret && signature) {
-        const rawBody = (req as any).rawBody || JSON.stringify(req.body);
-        const expectedSig = `sha256=${crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex')}`;
-        if (signature !== expectedSig) {
-          console.warn('[WhatsAppWebhook] Warning: Signature verification failed');
-          return res.status(401).send('Invalid signature');
-        }
-      }
-
-      const body = req.body;
-      if (body?.object === 'whatsapp_business_account' || body?.entry) {
-        for (const entry of body.entry || []) {
-          for (const change of entry.changes || []) {
-            const value = change?.value;
-
-            // 1. Handle Message Status Callbacks: sent, delivered, read, failed
-            if (value?.statuses && Array.isArray(value.statuses)) {
-              for (const statusItem of value.statuses) {
-                const messageId = statusItem.id;
-                const rawStatus = (statusItem.status || '').toLowerCase();
-                let mappedStatus: 'SENT' | 'DELIVERED' | 'READ' | 'FAILED' | null = null;
-
-                if (rawStatus === 'sent') mappedStatus = 'SENT';
-                else if (rawStatus === 'delivered') mappedStatus = 'DELIVERED';
-                else if (rawStatus === 'read') mappedStatus = 'READ';
-                else if (rawStatus === 'failed') mappedStatus = 'FAILED';
-
-                const errorMsg = statusItem.errors?.[0]?.title || statusItem.errors?.[0]?.message;
-
-                if (messageId && mappedStatus) {
-                  await updateFeedbackStatusByMessageId(messageId, mappedStatus, errorMsg);
-                }
-              }
-            }
-
-            // 2. Handle Incoming Customer Responses (Quick reply buttons, interactive buttons, text replies)
-            if (value?.messages && Array.isArray(value.messages)) {
-              for (const msg of value.messages) {
-                const fromPhone = msg.from;
-                const replyMessageId = msg.id;
-                const replyContextWamid = msg.context?.id;
-
-                let buttonText: string | undefined;
-                let buttonPayload: string | undefined;
-                let textBody: string | undefined;
-
-                if (msg.type === 'button') {
-                  buttonText = msg.button?.text;
-                  buttonPayload = msg.button?.payload;
-                } else if (msg.type === 'interactive') {
-                  if (msg.interactive?.type === 'button_reply') {
-                    buttonText = msg.interactive?.button_reply?.title;
-                    buttonPayload = msg.interactive?.button_reply?.id;
-                  } else if (msg.interactive?.type === 'list_reply') {
-                    buttonText = msg.interactive?.list_reply?.title;
-                    buttonPayload = msg.interactive?.list_reply?.id;
-                  }
-                } else if (msg.type === 'text') {
-                  textBody = msg.text?.body;
-                }
-
-                if (fromPhone && replyMessageId) {
-                  await processCustomerFeedbackResponse({
-                    replyMessageId,
-                    replyContextWamid,
-                    fromPhone,
-                    buttonText,
-                    buttonPayload,
-                    textBody,
-                  });
-                }
-              }
-            }
-          }
-        }
-      }
-      return res.status(200).send('EVENT_RECEIVED');
-    } catch (err: any) {
-      console.error('[WhatsAppWebhook] Error handling webhook payload:', err.message);
-      return res.status(200).send('EVENT_RECEIVED'); // Meta requires 200 OK
-    }
+  app.post(whatsappWebhookPaths, async (req, res) => {
+    return handleWhatsAppWebhookEvent(req, res);
   });
 
   // Single order tracking endpoint (Tenant-isolated and sanitized for customers)

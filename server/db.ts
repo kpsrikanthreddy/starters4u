@@ -513,6 +513,10 @@ export const inMemoryDb: InMemoryDbState = {
       is_takeaway_enabled: true,
       is_dine_in_enabled: true,
       is_counter_enabled: true,
+      google_review_url: 'https://g.page/r/CXG91tSNJZSDEBE/review',
+      feedback_alert_enabled: true,
+      feedback_alert_on_bad: true,
+      feedback_alert_phone: '+918179620607',
     },
     {
       id: 'sett-test-1',
@@ -861,6 +865,7 @@ export async function initializeDatabase(): Promise<{ success: boolean; mode: st
           'migrations/007_direct_upi_payment_attempts.sql',
           'migrations/009_order_confirmed_and_feedback.sql',
           'migrations/010_starters4u_order_feedback.sql',
+          'migrations/011_feedback_workflow_and_owner_alerts.sql',
         ];
 
         for (const relMig of migrationFiles) {

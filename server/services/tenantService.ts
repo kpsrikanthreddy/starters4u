@@ -3,6 +3,7 @@ import { AuthenticatedUser } from '../middleware/authMiddleware.js';
 import { getTenantDeliverySettings } from './adminService.js';
 
 export const FLAGSHIP_MOZZ_ID = 'a0000000-0000-0000-0000-000000000001';
+export const FLAGSHIP_MOZZ_RESTAURANT_ID = FLAGSHIP_MOZZ_ID;
 export const FLAGSHIP_MOZZ_BRANCH_ID = 'b0000000-0000-0000-0000-000000000001';
 export const FLAGSHIP_MOZZ_SLUG = 'mozz';
 
@@ -56,6 +57,9 @@ export interface RestaurantSettings {
   isDineInEnabled: boolean;
   isCounterEnabled: boolean;
   googleReviewUrl?: string;
+  feedbackAlertEnabled?: boolean;
+  feedbackAlertPhone?: string;
+  feedbackAlertOnBad?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -225,7 +229,10 @@ export async function getRestaurantSettings(restaurantId: string): Promise<Resta
           isTakeawayEnabled: row.is_takeaway_enabled !== false,
           isDineInEnabled: row.is_dine_in_enabled !== false,
           isCounterEnabled: row.is_counter_enabled !== false,
-          googleReviewUrl: row.google_review_url || row.r_google_review_url || undefined,
+          googleReviewUrl: row.google_review_url || row.r_google_review_url || (restaurantId === FLAGSHIP_MOZZ_RESTAURANT_ID ? 'https://g.page/r/CXG91tSNJZSDEBE/review' : undefined),
+          feedbackAlertEnabled: row.feedback_alert_enabled !== false,
+          feedbackAlertPhone: row.feedback_alert_phone || row.phone || row.r_phone || undefined,
+          feedbackAlertOnBad: row.feedback_alert_on_bad !== false,
           createdAt: row.created_at,
           updatedAt: row.updated_at,
         };
@@ -259,6 +266,10 @@ export async function getRestaurantSettings(restaurantId: string): Promise<Resta
     isTakeawayEnabled: memSettings?.is_takeaway_enabled !== false,
     isDineInEnabled: memSettings?.is_dine_in_enabled !== false,
     isCounterEnabled: memSettings?.is_counter_enabled !== false,
+    googleReviewUrl: memSettings?.google_review_url || memSettings?.googleReviewUrl || (restaurantId === FLAGSHIP_MOZZ_RESTAURANT_ID ? 'https://g.page/r/CXG91tSNJZSDEBE/review' : undefined),
+    feedbackAlertEnabled: memSettings?.feedback_alert_enabled !== false && memSettings?.feedbackAlertEnabled !== false,
+    feedbackAlertPhone: memSettings?.feedback_alert_phone || memSettings?.feedbackAlertPhone || memSettings?.phone || rest?.phone || '+918179620607',
+    feedbackAlertOnBad: memSettings?.feedback_alert_on_bad !== false && memSettings?.feedbackAlertOnBad !== false,
   };
 }
 
@@ -275,9 +286,10 @@ export async function updateRestaurantSettings(
         INSERT INTO restaurant_settings (
           restaurant_id, default_branch_id, display_name, logo_url, banner_url,
           phone, email, address, latitude, longitude, timezone, currency, tax_rate,
-          business_hours, is_delivery_enabled, is_takeaway_enabled, is_dine_in_enabled, is_counter_enabled, updated_at
+          business_hours, is_delivery_enabled, is_takeaway_enabled, is_dine_in_enabled, is_counter_enabled,
+          google_review_url, feedback_alert_enabled, feedback_alert_phone, feedback_alert_on_bad, updated_at
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW()
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, NOW()
         )
         ON CONFLICT (restaurant_id) DO UPDATE SET
           default_branch_id = COALESCE($2, restaurant_settings.default_branch_id),
@@ -297,6 +309,10 @@ export async function updateRestaurantSettings(
           is_takeaway_enabled = COALESCE($16, restaurant_settings.is_takeaway_enabled),
           is_dine_in_enabled = COALESCE($17, restaurant_settings.is_dine_in_enabled),
           is_counter_enabled = COALESCE($18, restaurant_settings.is_counter_enabled),
+          google_review_url = COALESCE($19, restaurant_settings.google_review_url),
+          feedback_alert_enabled = COALESCE($20, restaurant_settings.feedback_alert_enabled),
+          feedback_alert_phone = COALESCE($21, restaurant_settings.feedback_alert_phone),
+          feedback_alert_on_bad = COALESCE($22, restaurant_settings.feedback_alert_on_bad),
           updated_at = NOW()
         RETURNING *;
       `;
@@ -319,18 +335,29 @@ export async function updateRestaurantSettings(
         updates.isTakeawayEnabled !== undefined ? updates.isTakeawayEnabled : null,
         updates.isDineInEnabled !== undefined ? updates.isDineInEnabled : null,
         updates.isCounterEnabled !== undefined ? updates.isCounterEnabled : null,
+        updates.googleReviewUrl !== undefined ? updates.googleReviewUrl : null,
+        updates.feedbackAlertEnabled !== undefined ? updates.feedbackAlertEnabled : null,
+        updates.feedbackAlertPhone !== undefined ? updates.feedbackAlertPhone : null,
+        updates.feedbackAlertOnBad !== undefined ? updates.feedbackAlertOnBad : null,
       ]);
 
-      // Sync base restaurant fields if display name or currency or tax changed
-      if (updates.displayName || updates.currency || updates.taxRate) {
+      // Sync base restaurant fields if display name or currency or tax or review URL changed
+      if (updates.displayName || updates.currency || updates.taxRate || updates.googleReviewUrl !== undefined) {
         await query(
           `UPDATE restaurants SET
             name = COALESCE($2, name),
             currency = COALESCE($3, currency),
             tax_rate = COALESCE($4, tax_rate),
+            google_review_url = COALESCE($5, google_review_url),
             updated_at = NOW()
            WHERE id = $1`,
-          [restaurantId, updates.displayName || null, updates.currency || null, updates.taxRate || null]
+          [
+            restaurantId,
+            updates.displayName || null,
+            updates.currency || null,
+            updates.taxRate || null,
+            updates.googleReviewUrl || null,
+          ]
         );
       }
     } catch (err: any) {
