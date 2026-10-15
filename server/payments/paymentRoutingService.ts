@@ -13,6 +13,7 @@ export interface PaymentRoutingConfig {
 
 export interface RouteCheckoutParams {
   orderType: string;
+  entrySource?: string;
   paymentMethod?: string;
   restaurantId: string;
   restaurantSlug?: string;
@@ -29,8 +30,8 @@ export interface RouteCheckoutParams {
     upiId?: string;
     merchantDisplayName?: string;
   };
-  isRazorpayConfigured: () => boolean;
-  getRazorpayKeyId: () => string;
+  isRazorpayConfigured?: () => boolean;
+  getRazorpayKeyId?: () => string;
 }
 
 export interface PaymentRouteResult {
@@ -42,6 +43,7 @@ export interface PaymentRouteResult {
   keyId?: string;
   isRazorpayAvailable: boolean;
   isCashEnabled: boolean;
+  isCodEligible?: boolean;
   isUpiEnabled: boolean;
   isOnlineEnabled: boolean;
   directUpiConfigured: boolean;
@@ -143,10 +145,25 @@ export class PaymentRoutingService {
     const channelProvider = this.resolveProviderForChannel(orderType, paymentMethod);
     const merchantUpi = (paymentSettings.merchantUpiId || paymentSettings.upiId || '').trim();
     const directUpiConfigured = Boolean(merchantUpi.length > 0);
-    const hasRazorpay = isRazorpayConfigured();
-    const razorpayKeyId = hasRazorpay ? getRazorpayKeyId() : undefined;
+    const hasRazorpay = typeof isRazorpayConfigured === 'function' ? isRazorpayConfigured() : true;
+    const razorpayKeyId = hasRazorpay
+      ? typeof getRazorpayKeyId === 'function'
+        ? getRazorpayKeyId()
+        : process.env.RAZORPAY_KEY_ID || ''
+      : undefined;
 
-    // 1. Counter Cash Flow
+    const normalizedOrderType = (orderType || '').toLowerCase().trim();
+    const normalizedEntrySource = (params.entrySource || '').toLowerCase().trim();
+
+    // Strict Multi-tenant COD Restrictions:
+    // Disabled for Table QR, Dine-in, Counter QR, POS Counter in online checkout, and Takeaway.
+    // Only available for regular delivery orders when enabled by restaurant settings.
+    const isCodEligible =
+      normalizedOrderType === 'delivery' &&
+      !['table_qr', 'counter_qr', 'pos_counter'].includes(normalizedEntrySource) &&
+      paymentSettings.isCashEnabled !== false;
+
+    // 1. Counter Cash Flow (POS in-store staff cash collection)
     if (channelProvider === 'CASH') {
       return {
         success: true,
@@ -157,6 +174,7 @@ export class PaymentRoutingService {
         isRazorpayAvailable: hasRazorpay,
         keyId: razorpayKeyId,
         isCashEnabled: paymentSettings.isCashEnabled !== false,
+        isCodEligible,
         isUpiEnabled: paymentSettings.isUpiEnabled !== false,
         isOnlineEnabled: paymentSettings.isOnlineEnabled !== false,
         directUpiConfigured,
@@ -216,7 +234,8 @@ export class PaymentRoutingService {
         },
         isRazorpayAvailable: hasRazorpay,
         keyId: razorpayKeyId,
-        isCashEnabled: paymentSettings.isCashEnabled !== false,
+        isCashEnabled: isCodEligible,
+        isCodEligible,
         isUpiEnabled: true,
         isOnlineEnabled: paymentSettings.isOnlineEnabled !== false,
         directUpiConfigured: true,
@@ -233,7 +252,8 @@ export class PaymentRoutingService {
       channelProvider,
       keyId: razorpayKeyId,
       isRazorpayAvailable: hasRazorpay,
-      isCashEnabled: paymentSettings.isCashEnabled !== false,
+      isCashEnabled: isCodEligible,
+      isCodEligible,
       isUpiEnabled: paymentSettings.isUpiEnabled !== false,
       isOnlineEnabled: paymentSettings.isOnlineEnabled !== false,
       directUpiConfigured,

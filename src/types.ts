@@ -102,9 +102,12 @@ export interface QRSessionInfo {
   isTableLocked?: boolean;
   verificationMessage?: string;
   signature?: string;
+  type?: string;
 }
 
-export type PaymentMethod = 'razorpay' | 'upi' | 'upi_qr' | 'gpay' | 'phonepe' | 'paytm' | 'card' | 'netbanking' | 'cod';
+export const DEFAULT_RESTAURANT_ID = 'a0000000-0000-0000-0000-000000000001';
+
+export type PaymentMethod = 'razorpay' | 'upi' | 'upi_qr' | 'gpay' | 'phonepe' | 'paytm' | 'card' | 'netbanking' | 'cod' | 'cash';
 
 export type CustomerLocationSource = 'device_gps' | 'map_pin' | 'saved_address';
 

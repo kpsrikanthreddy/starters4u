@@ -890,6 +890,174 @@ export async function sendWhatsAppTextMessage(
 }
 
 /**
+ * Normalizes button text or interactive reply to standard rating:
+ * GOOD → GOOD
+ * AVERAGE → AVERAGE
+ * BAD → BAD
+ * Case-insensitive.
+ */
+export function normalizeRating(raw?: string | null): FeedbackRating | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const cleaned = raw.trim().toUpperCase();
+  if (cleaned === 'GOOD' || cleaned.includes('GOOD')) return 'GOOD';
+  if (cleaned === 'AVERAGE' || cleaned.includes('AVERAGE')) return 'AVERAGE';
+  if (cleaned === 'BAD' || cleaned.includes('BAD')) return 'BAD';
+  return null;
+}
+
+/**
+ * Resolves customer_feedback_requests record using the outbound WhatsApp message ID (wamid)
+ * from message.context.id.
+ */
+export async function getFeedbackRequestByOutboundWamid(
+  wamid: string
+): Promise<any | null> {
+  if (!wamid) return null;
+  const cleanWamid = wamid.trim();
+
+  if (isPgActive()) {
+    try {
+      const res = await query(
+        `SELECT cfr.*, o.order_number, r.name as restaurant_name,
+                COALESCE(s.display_name, r.name) as display_name,
+                COALESCE(s.google_review_url, r.google_review_url) as google_review_url
+         FROM customer_feedback_requests cfr
+         LEFT JOIN orders o ON cfr.order_id = o.id
+         LEFT JOIN restaurants r ON cfr.restaurant_id = r.id
+         LEFT JOIN restaurant_settings s ON r.id = s.restaurant_id
+         WHERE cfr.whatsapp_message_id = $1 OR TRIM(cfr.whatsapp_message_id) = $1
+         LIMIT 1`,
+        [cleanWamid]
+      );
+      if (res.rows[0]) return res.rows[0];
+    } catch (err: any) {
+      console.error('[FeedbackService] Error finding feedback record by outbound wamid in PostgreSQL:', err.message);
+    }
+  }
+
+  // In-memory fallback
+  const memList = inMemoryDb.customer_feedback_requests || [];
+  const found = memList.find(
+    (r: any) =>
+      r.whatsapp_message_id === cleanWamid ||
+      (r.whatsapp_message_id && String(r.whatsapp_message_id).trim() === cleanWamid)
+  );
+  if (found) {
+    const order = (inMemoryDb.orders || []).find((o: any) => o.id === found.order_id);
+    const rest = (inMemoryDb.restaurants || []).find((r: any) => r.id === found.restaurant_id);
+    const sett = (inMemoryDb.restaurant_settings || []).find((s: any) => s.restaurant_id === found.restaurant_id);
+    return {
+      ...found,
+      order_number: order?.order_number || `Order-${(found.order_id || '').slice(0, 6).toUpperCase()}`,
+      restaurant_name: rest?.name || 'MOZZ Chinese & Pizzateria',
+      display_name: sett?.display_name || rest?.name || 'MOZZ Chinese & Pizzateria',
+      google_review_url: sett?.google_review_url || rest?.google_review_url,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Atomically updates feedback_rating, feedback_received_at, and status = 'RESPONDED'
+ * ONLY where feedback_rating IS NULL (first response wins).
+ * Returns number of updated records: 1 if first accepted response, 0 if already rated.
+ */
+export async function atomicallyUpdateFeedbackRating(
+  feedbackRequestId: string,
+  rating: FeedbackRating,
+  replyMessageId?: string
+): Promise<number> {
+  if (!feedbackRequestId || !rating) return 0;
+
+  if (isPgActive()) {
+    try {
+      const res = await query(
+        `UPDATE customer_feedback_requests
+         SET feedback_rating = $1,
+             feedback_received_at = NOW(),
+             status = 'RESPONDED',
+             feedback_reply_message_id = $2,
+             updated_at = NOW()
+         WHERE id = $3
+           AND feedback_rating IS NULL
+         RETURNING id, feedback_rating`,
+        [rating, replyMessageId || null, feedbackRequestId]
+      );
+      return res.rowCount ?? 0;
+    } catch (err: any) {
+      console.error('[FeedbackService] Error atomically updating feedback rating in PostgreSQL:', err.message);
+      return 0;
+    }
+  }
+
+  // In-memory fallback
+  const rec = (inMemoryDb.customer_feedback_requests || []).find(
+    (r: any) => (r.id === feedbackRequestId || r.order_id === feedbackRequestId) && !r.feedback_rating
+  );
+  if (rec) {
+    rec.feedback_rating = rating;
+    rec.feedback_received_at = new Date().toISOString();
+    rec.status = 'RESPONDED';
+    rec.feedback_reply_message_id = replyMessageId || null;
+    return 1;
+  }
+  return 0;
+}
+
+/**
+ * Executes follow-up customer message and restaurant admin notification
+ * upon the first accepted feedback response.
+ */
+export async function handleAcceptedFeedbackFollowup(
+  feedbackRecord: any,
+  rating: FeedbackRating
+): Promise<void> {
+  const customerPhone = feedbackRecord.customer_phone;
+  const restaurantName = feedbackRecord.display_name || feedbackRecord.restaurant_name || 'Starters4U';
+  const orderNumber = feedbackRecord.order_number || `Order-${(feedbackRecord.order_id || '').slice(0, 6).toUpperCase()}`;
+  const googleReviewUrl = feedbackRecord.google_review_url;
+
+  let ackMessage = '';
+  if (rating === 'GOOD') {
+    ackMessage = `Hi,\n\nThank you for your wonderful feedback! ❤️\n\nWe're happy you enjoyed your experience with ${restaurantName}.`;
+    if (googleReviewUrl && googleReviewUrl.trim().startsWith('http')) {
+      ackMessage += `\n\nWe would appreciate it if you could share your experience on Google.\n\n⭐ Share your review:\n\n${googleReviewUrl.trim()}\n\nThank you for supporting ${restaurantName}! 🙏`;
+    } else {
+      ackMessage += `\n\nThank you for supporting ${restaurantName}! 🙏`;
+    }
+  } else if (rating === 'AVERAGE') {
+    ackMessage = `Hi,\n\nThank you for sharing your feedback about ${restaurantName}.\n\nWe appreciate your honesty and would love to improve your experience.\n\nCould you please tell us what we could have done better?\n\nYour suggestions help us serve you better. 🙏`;
+  } else if (rating === 'BAD') {
+    ackMessage = `Hi,\n\nWe're sorry to hear that your experience with ${restaurantName} wasn't satisfactory. 🙏\n\nYour feedback is important to us.\n\nCould you please tell us what went wrong with ${orderNumber}?\n\nOur team will review your concern and work to improve your experience.\n\nThank you for giving us the opportunity to improve.`;
+  }
+
+  if (ackMessage && customerPhone) {
+    try {
+      await sendWhatsAppTextMessage(customerPhone, ackMessage);
+    } catch (e: any) {
+      console.warn('[FeedbackService] Warning sending customer acknowledgement:', e.message);
+    }
+  }
+
+  // Real-time broadcast to Restaurant Admin
+  try {
+    realtimeNotificationService.broadcast({
+      type: 'CUSTOMER_FEEDBACK',
+      restaurantId: feedbackRecord.restaurant_id,
+      data: {
+        orderId: feedbackRecord.order_id,
+        orderNumber,
+        rating,
+        receivedAt: new Date().toISOString(),
+      },
+    });
+  } catch {
+    // Non-fatal
+  }
+}
+
+/**
  * Parse customer rating from incoming WhatsApp message:
  * Approved Meta template quick reply buttons:
  * ⭐ Good
@@ -901,6 +1069,13 @@ export function parseFeedbackRatingFromMessage(
   payload?: string,
   messageText?: string
 ): FeedbackRating | null {
+  const norm1 = normalizeRating(buttonText);
+  if (norm1) return norm1;
+  const norm2 = normalizeRating(payload);
+  if (norm2) return norm2;
+  const norm3 = normalizeRating(messageText);
+  if (norm3) return norm3;
+
   const text = (buttonText || payload || messageText || '').trim().toLowerCase();
   if (!text) return null;
 

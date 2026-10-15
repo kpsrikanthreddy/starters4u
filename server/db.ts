@@ -790,9 +790,35 @@ function executeInMemoryQuery(text: string, params: any[] = []): { rows: any[]; 
   if (lower.startsWith('select') && lower.includes('from customer_feedback_requests')) {
     let rows = inMemoryDb.customer_feedback_requests || [];
     if (params[0]) {
-      rows = rows.filter((r: any) => r.order_id === params[0] || r.id === params[0] || r.restaurant_id === params[0]);
+      const p = String(params[0]).trim();
+      rows = rows.filter(
+        (r: any) =>
+          r.order_id === p ||
+          r.id === p ||
+          r.restaurant_id === p ||
+          r.whatsapp_message_id === p ||
+          (r.whatsapp_message_id && String(r.whatsapp_message_id).trim() === p) ||
+          r.customer_phone === p
+      );
     }
     return { rows, rowCount: rows.length };
+  }
+  if (lower.startsWith('update') && lower.includes('customer_feedback_requests')) {
+    // Atomic update for feedback_rating
+    const rating = params[0];
+    const replyMsgId = params[1];
+    const targetId = params[2];
+    const rec = (inMemoryDb.customer_feedback_requests || []).find(
+      (r: any) => (r.id === targetId || r.order_id === targetId) && !r.feedback_rating
+    );
+    if (rec) {
+      rec.feedback_rating = rating;
+      rec.feedback_received_at = new Date().toISOString();
+      rec.status = 'RESPONDED';
+      rec.feedback_reply_message_id = replyMsgId || null;
+      return { rows: [rec], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 0 };
   }
 
   return { rows: [], rowCount: 0 };

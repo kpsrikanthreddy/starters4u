@@ -691,6 +691,41 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
   const paymentMethod = payload.paymentMethod || 'cash';
   let paymentStatus = payload.paymentStatus || (paymentMethod === 'cod' ? 'cod_pending' : 'pending');
 
+  // CRITICAL MULTI-TENANT COD RESTRICTION:
+  // Cash on Delivery is strictly forbidden for:
+  // - Table QR / Dine-in orders
+  // - Counter QR orders
+  // - POS counter orders in customer online checkout
+  // - Takeaway orders
+  // COD is ONLY permitted for regular delivery orders when enabled by the restaurant tenant.
+  if (paymentMethod === 'cod') {
+    const hasTable = Boolean(payload.tableId || payload.tableNumber || payload.customer?.tableNumber || tableNumber);
+    const isDisallowedEntry =
+      entrySource === 'table_qr' ||
+      entrySource === 'counter_qr' ||
+      entrySource === 'pos_counter' ||
+      payload.entrySource === 'table_qr' ||
+      payload.entrySource === 'counter_qr' ||
+      payload.entrySource === 'pos_counter' ||
+      payload.qrSession?.source === 'table_qr' ||
+      payload.qrSession?.source === 'counter_qr' ||
+      payload.qrSession?.source === 'pos_counter' ||
+      payload.qrSession?.type === 'table' ||
+      payload.qrSession?.type === 'counter' ||
+      payload.qrSession?.type === 'pos' ||
+      hasTable;
+
+    if (orderType !== 'delivery' || isDisallowedEntry) {
+      const typeDisplay = orderType === 'dine_in' || hasTable ? 'table/dine-in' : orderType === 'takeaway' ? 'takeaway' : orderType;
+      throw new Error(`Cash on Delivery is not allowed for ${typeDisplay} orders. Please choose an online payment method (UPI, Cards, or Net Banking).`);
+    }
+
+    const tenantPaymentSettings = await getRestaurantPaymentSettings(restaurantId).catch(() => null);
+    if (tenantPaymentSettings?.isCashEnabled === false) {
+      throw new Error('Cash on Delivery is currently disabled for this restaurant.');
+    }
+  }
+
   // CRITICAL SECURITY ENFORCEMENT:
   // If payment is required (online payments like razorpay, upi, direct_upi),
   // NEVER mark order as paid without server-verified payment evidence.
@@ -943,12 +978,13 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
       });
 
       const assembled = await assembleOrderObject(insertedOrder, itemRows, histRes.rows, customerRecord);
-      // Requirement 3: Ensure newly placed orders create correct KOT/Bill print jobs without silent skipping
+      const isUnconfirmedCod = assembled.paymentMethod === 'cod' && assembled.status === 'placed';
       const shouldCreatePrintJobs =
-        assembled.paymentStatus === 'paid' ||
-        ['confirmed', 'accepted', 'placed'].includes(assembled.status) ||
+        !isUnconfirmedCod &&
+        (assembled.paymentStatus === 'paid' ||
+        ['confirmed', 'accepted'].includes(assembled.status) ||
         ['dine_in', 'counter'].includes(assembled.orderType) ||
-        ['cod', 'cash'].includes(assembled.paymentMethod);
+        assembled.paymentMethod === 'cash');
       if (shouldCreatePrintJobs && !['cancelled', 'rejected'].includes(assembled.status)) {
         await createPrintJobsForOrder(assembled, {
           reason: assembled.paymentStatus === 'paid' ? 'online_paid' : 'confirmed',
@@ -1111,11 +1147,13 @@ export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
   });
 
   const assembled = await assembleOrderObject(newOrderRow, insertedItemRows, [histRow], customerRecord);
+  const isUnconfirmedCod = assembled.paymentMethod === 'cod' && assembled.status === 'placed';
   const shouldCreatePrintJobs =
-    assembled.paymentStatus === 'paid' ||
-    ['confirmed', 'accepted', 'placed'].includes(assembled.status) ||
+    !isUnconfirmedCod &&
+    (assembled.paymentStatus === 'paid' ||
+    ['confirmed', 'accepted'].includes(assembled.status) ||
     ['dine_in', 'counter'].includes(assembled.orderType) ||
-    ['cod', 'cash'].includes(assembled.paymentMethod);
+    assembled.paymentMethod === 'cash');
   if (shouldCreatePrintJobs && !['cancelled', 'rejected'].includes(assembled.status)) {
     await createPrintJobsForOrder(assembled, {
       reason: assembled.paymentStatus === 'paid' ? 'online_paid' : 'confirmed',

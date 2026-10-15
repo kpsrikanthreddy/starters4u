@@ -122,6 +122,11 @@ export class RealtimeNotificationService {
     console.info(`[RealtimeNotificationService] Broadcast event '${eventName}' to ${recipientCount} clients for restaurant ${restaurantId}`);
   }
 
+  public broadcast(payload: any): void {
+    const restaurantId = payload?.restaurantId || payload?.restaurant_id || 'ALL';
+    this.publishRestaurantEvent(restaurantId, payload?.type || payload?.event || 'NOTIFICATION', payload);
+  }
+
   private sendToClient(client: SseClient, eventName: string, data: any): void {
     try {
       client.res.write(`event: ${eventName}\n`);

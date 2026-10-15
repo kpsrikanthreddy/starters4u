@@ -2958,6 +2958,44 @@ export function createApp(): express.Application {
           }
         }
       } else if (paymentMethod === 'cod') {
+        const reqEntrySource = (
+          req.body.entrySource ||
+          req.body.qrSession?.source ||
+          ''
+        ).toString().toLowerCase().trim();
+        const reqQrType = (
+          req.body.qrSession?.type ||
+          ''
+        ).toString().toLowerCase().trim();
+        const hasTable = Boolean(req.body.tableId || req.body.tableNumber || req.body.customer?.tableNumber);
+
+        const isDisallowedEntry =
+          ['table_qr', 'counter_qr', 'pos_counter'].includes(reqEntrySource) ||
+          ['table', 'counter', 'pos'].includes(reqQrType) ||
+          hasTable;
+
+        if (orderType !== 'delivery' || isDisallowedEntry) {
+          const typeDisplay =
+            orderType === 'dine_in' || hasTable
+              ? 'table/dine-in'
+              : orderType === 'takeaway'
+              ? 'takeaway'
+              : reqEntrySource === 'counter_qr'
+              ? 'counter QR'
+              : orderType;
+          return res.status(400).json({
+            error: `Cash on Delivery is not allowed for ${typeDisplay} orders. Please choose an online payment method (UPI, Cards, or Net Banking).`,
+          });
+        }
+
+        const targetRestId = req.body.restaurantId || 'a0000000-0000-0000-0000-000000000001';
+        const tenantPaymentSettings = await tenantService.getRestaurantPaymentSettings(targetRestId).catch(() => null);
+        if (tenantPaymentSettings?.isCashEnabled === false) {
+          return res.status(400).json({
+            error: 'Cash on Delivery is currently disabled for this restaurant.',
+          });
+        }
+
         req.body.paymentStatus = 'cod_pending';
         req.body.status = 'placed';
       } else {
@@ -3179,6 +3217,7 @@ export function createApp(): express.Application {
 
       const routeResult = await paymentRoutingService.resolvePaymentRoute({
         orderType,
+        entrySource: req.body.entrySource || req.body.qrSession?.source || req.body.source,
         paymentMethod,
         restaurantId: targetRestId,
         restaurantSlug: req.body.restaurantSlug,

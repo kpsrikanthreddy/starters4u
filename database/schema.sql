@@ -735,17 +735,30 @@ CREATE TABLE IF NOT EXISTS customer_feedback_requests (
     restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
     order_id UUID UNIQUE NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     customer_phone VARCHAR(50) NOT NULL,
-    template_name VARCHAR(100) NOT NULL DEFAULT 'glossylooks_customer_feedback',
+    template_name VARCHAR(100) NOT NULL DEFAULT 'starters4u_order_feedback',
     scheduled_at TIMESTAMPTZ NOT NULL,
     sent_at TIMESTAMPTZ,
     whatsapp_message_id VARCHAR(255),
-    status VARCHAR(20) NOT NULL DEFAULT 'SCHEDULED' CHECK (status IN ('SCHEDULED', 'SENDING', 'SENT', 'DELIVERED', 'READ', 'FAILED')),
+    status VARCHAR(20) NOT NULL DEFAULT 'SCHEDULED' CHECK (status IN ('SCHEDULED', 'SENDING', 'SENT', 'DELIVERED', 'READ', 'FAILED', 'RESPONDED')),
     error_message TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    feedback_rating VARCHAR(20) CHECK (feedback_rating IN ('GOOD', 'AVERAGE', 'BAD') OR feedback_rating IS NULL),
+    feedback_received_at TIMESTAMPTZ,
+    feedback_reply_message_id VARCHAR(255),
+    customer_comment TEXT,
+    comment_received_at TIMESTAMPTZ,
+    owner_alert_status VARCHAR(20) DEFAULT 'PENDING',
+    owner_alert_sent_at TIMESTAMPTZ,
+    owner_alert_whatsapp_message_id VARCHAR(255),
+    owner_alert_error TEXT,
+    acknowledgement_message_id VARCHAR(255),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_feedback_due ON customer_feedback_requests(status, scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_feedback_order ON customer_feedback_requests(order_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_restaurant ON customer_feedback_requests(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_wamid ON customer_feedback_requests(whatsapp_message_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_phone ON customer_feedback_requests(customer_phone);
 
 

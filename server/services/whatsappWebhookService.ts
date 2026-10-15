@@ -1,6 +1,11 @@
 import crypto from 'crypto';
+import { initializeDatabase } from '../db.js';
 import {
   updateFeedbackStatusByMessageId,
+  normalizeRating,
+  getFeedbackRequestByOutboundWamid,
+  atomicallyUpdateFeedbackRating,
+  handleAcceptedFeedbackFollowup,
   processCustomerFeedbackResponse,
 } from './feedbackService.js';
 
@@ -58,13 +63,13 @@ export function handleWhatsAppVerification(req: any, res: any) {
 
   const challengePresent = challenge !== undefined && challenge !== null && challenge !== '';
 
-  // 6. Safe server logging (NEVER log the actual verify token)
+  // Safe server logging (NEVER log the actual verify token)
   console.info('WhatsApp webhook verification request received');
   console.info(`mode=${mode}`);
   console.info(`tokenMatch=${tokenMatch}`);
   console.info(`challengePresent=${challengePresent}`);
 
-  // 2. Return HTTP 200 with ONLY hub.challenge as plain text if valid, else 403
+  // Return HTTP 200 with ONLY hub.challenge as plain text if valid, else 403
   if (mode === 'subscribe' && tokenMatch && challengePresent) {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     return res.status(200).send(String(challenge));
@@ -78,17 +83,105 @@ export function handleWhatsAppVerification(req: any, res: any) {
 }
 
 /**
+ * Safely parses the request body across Express and Vercel Serverless Function environments.
+ */
+async function parseRequestBody(req: any): Promise<any> {
+  if (req.body) {
+    if (typeof req.body === 'string') {
+      try {
+        return JSON.parse(req.body);
+      } catch {
+        return {};
+      }
+    }
+    if (Buffer.isBuffer(req.body)) {
+      try {
+        return JSON.parse(req.body.toString('utf-8'));
+      } catch {
+        return {};
+      }
+    }
+    return req.body;
+  }
+
+  // If body is not attached, read from stream if available
+  if (typeof req.on === 'function') {
+    try {
+      const raw = await new Promise<string>((resolve, reject) => {
+        let data = '';
+        req.on('data', (chunk: any) => {
+          data += chunk;
+        });
+        req.on('end', () => resolve(data));
+        req.on('error', reject);
+      });
+      if (raw) {
+        return JSON.parse(raw);
+      }
+    } catch {
+      return {};
+    }
+  }
+
+  return {};
+}
+
+/**
  * Handles Meta WhatsApp Cloud API webhook events (POST).
- * Processes message delivery status callbacks and incoming customer quick-replies.
+ *
+ * Implements:
+ * 1. Safe production logging:
+ *    "REAL WHATSAPP WEBHOOK RECEIVED"
+ *    object
+ *    entry count
+ *    change.field
+ *    message.type
+ *    message.id
+ *    message.from
+ *    message.context.id
+ *    button.text
+ *    button.payload
+ *    interactive.button_reply.id
+ *    interactive.button_reply.title
+ *    (Never logs access tokens or secrets)
+ *
+ * 2. Normalization of real Meta reply formats:
+ *    - message.type === "button": message.button?.text || message.button?.payload
+ *    - message.type === "interactive": message.interactive?.button_reply?.title || message.interactive?.button_reply?.id
+ *    - Normalized to: GOOD, AVERAGE, BAD (case-insensitive)
+ *
+ * 3. Exact order correlation via message.context.id -> customer_feedback_requests.whatsapp_message_id
+ *    (Does not depend only on customer phone number)
+ *
+ * 4. Atomic database update:
+ *    feedback_rating, feedback_received_at, status = RESPONDED
+ *    Only where feedback_rating IS NULL (first response wins)
+ *
+ * 5. Safe diagnostics logging:
+ *    feedbackButtonReceived=true
+ *    rating=GOOD/AVERAGE/BAD
+ *    contextMessageIdPresent=true/false
+ *    feedbackRequestFound=true/false
+ *    databaseUpdateCount=<number>
+ *
+ * 6. Graceful HTTP 200 response to Meta even if feedback request cannot be resolved.
  */
 export async function handleWhatsAppWebhookEvent(req: any, res: any) {
   try {
-    const appSecret = process.env.WHATSAPP_APP_SECRET || process.env.META_APP_SECRET;
-    const signature = req.headers?.['x-hub-signature-256'] as string;
+    // Ensure Database is initialized and connected before handling events
+    try {
+      await initializeDatabase();
+    } catch (dbErr: any) {
+      console.warn('[WhatsAppWebhook] Database connection notice:', dbErr.message);
+    }
+
+    const body = await parseRequestBody(req);
 
     // Optional Meta signature verification if WHATSAPP_APP_SECRET is configured
+    const appSecret = process.env.WHATSAPP_APP_SECRET || process.env.META_APP_SECRET;
+    const signature = req.headers?.['x-hub-signature-256'] as string;
     if (appSecret && signature) {
-      const rawBody = (req as any).rawBody || (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
+      const rawBody = (req as any).rawBody || (typeof req.body === 'string' ? req.body : JSON.stringify(body));
       const expectedSig = `sha256=${crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex')}`;
       if (signature !== expectedSig) {
         console.warn('[WhatsAppWebhook] Warning: Signature verification failed');
@@ -96,13 +189,18 @@ export async function handleWhatsAppWebhookEvent(req: any, res: any) {
       }
     }
 
-    const body = req.body;
+    // 1. Safe Production Logging
+    console.info('REAL WHATSAPP WEBHOOK RECEIVED');
+    console.info(`object=${body?.object ?? 'undefined'}`);
+    console.info(`entry count=${Array.isArray(body?.entry) ? body.entry.length : 0}`);
+
     if (body?.object === 'whatsapp_business_account' || body?.entry) {
       for (const entry of body.entry || []) {
         for (const change of entry.changes || []) {
           const value = change?.value;
+          console.info(`change.field=${change?.field ?? 'undefined'}`);
 
-          // 1. Handle Message Status Callbacks: sent, delivered, read, failed
+          // Handle Message Status Callbacks: sent, delivered, read, failed
           if (value?.statuses && Array.isArray(value.statuses)) {
             for (const statusItem of value.statuses) {
               const messageId = statusItem.id;
@@ -122,40 +220,88 @@ export async function handleWhatsAppWebhookEvent(req: any, res: any) {
             }
           }
 
-          // 2. Handle Incoming Customer Responses (Quick reply buttons, interactive buttons, text replies)
+          // Handle Incoming Customer Messages
           if (value?.messages && Array.isArray(value.messages)) {
             for (const msg of value.messages) {
-              const fromPhone = msg.from;
-              const replyMessageId = msg.id;
-              const replyContextWamid = msg.context?.id;
+              // Safe Production Logging for incoming message fields
+              console.info(`message.type=${msg?.type ?? 'undefined'}`);
+              console.info(`message.id=${msg?.id ?? 'undefined'}`);
+              console.info(`message.from=${msg?.from ?? 'undefined'}`);
+              console.info(`message.context.id=${msg?.context?.id ?? 'undefined'}`);
+              console.info(`button.text=${msg?.button?.text ?? 'undefined'}`);
+              console.info(`button.payload=${msg?.button?.payload ?? 'undefined'}`);
+              console.info(`interactive.button_reply.id=${msg?.interactive?.button_reply?.id ?? 'undefined'}`);
+              console.info(`interactive.button_reply.title=${msg?.interactive?.button_reply?.title ?? 'undefined'}`);
 
-              let buttonText: string | undefined;
-              let buttonPayload: string | undefined;
-              let textBody: string | undefined;
-
+              // 2. Handle both possible real Meta reply formats
+              let ratingText: string | undefined;
               if (msg.type === 'button') {
-                buttonText = msg.button?.text;
-                buttonPayload = msg.button?.payload;
+                ratingText = msg.button?.text || msg.button?.payload;
               } else if (msg.type === 'interactive') {
-                if (msg.interactive?.type === 'button_reply') {
-                  buttonText = msg.interactive?.button_reply?.title;
-                  buttonPayload = msg.interactive?.button_reply?.id;
-                } else if (msg.interactive?.type === 'list_reply') {
-                  buttonText = msg.interactive?.list_reply?.title;
-                  buttonPayload = msg.interactive?.list_reply?.id;
-                }
-              } else if (msg.type === 'text') {
-                textBody = msg.text?.body;
+                ratingText = msg.interactive?.button_reply?.title || msg.interactive?.button_reply?.id;
               }
 
-              if (fromPhone && replyMessageId) {
+              const rating = normalizeRating(ratingText);
+
+              if (rating) {
+                // Customer clicked Good, Average, or Bad
+                const contextId = msg.context?.id ? String(msg.context.id).trim() : undefined;
+                const contextMessageIdPresent = Boolean(contextId);
+
+                // 5. Safe diagnostics logs
+                console.info('feedbackButtonReceived=true');
+                console.info(`rating=${rating}`);
+                console.info(`contextMessageIdPresent=${contextMessageIdPresent}`);
+
+                let feedbackRequest: any = null;
+                let databaseUpdateCount = 0;
+
+                // 3. Use message.context.id to find customer_feedback_requests record
+                if (contextMessageIdPresent && contextId) {
+                  feedbackRequest = await getFeedbackRequestByOutboundWamid(contextId);
+                }
+
+                const feedbackRequestFound = Boolean(feedbackRequest);
+                console.info(`feedbackRequestFound=${feedbackRequestFound}`);
+
+                // 4. Atomically update feedback_rating, feedback_received_at, status = RESPONDED
+                // Only where feedback_rating IS NULL
+                if (feedbackRequest) {
+                  databaseUpdateCount = await atomicallyUpdateFeedbackRating(
+                    feedbackRequest.id,
+                    rating,
+                    msg.id
+                  );
+
+                  if (databaseUpdateCount === 1) {
+                    console.info(`[WhatsAppWebhook] Accepted FIRST feedback response: ${rating} for order ${feedbackRequest.order_number || feedbackRequest.order_id}`);
+                    await handleAcceptedFeedbackFollowup(feedbackRequest, rating);
+                  } else {
+                    console.info(`[WhatsAppWebhook] Duplicate feedback click ignored for order ${feedbackRequest.order_number || feedbackRequest.order_id}. Existing rating kept: ${feedbackRequest.feedback_rating}`);
+                  }
+                } else {
+                  // 6. Log reason if feedback request cannot be resolved
+                  console.warn(
+                    `[WhatsAppWebhook] Feedback request could not be resolved for context.id="${contextId || ''}". Reason: ${
+                      contextMessageIdPresent
+                        ? 'No customer_feedback_requests record matches this outbound whatsapp_message_id'
+                        : 'message.context.id is missing'
+                    }`
+                  );
+                }
+
+                // 5. Safe log databaseUpdateCount
+                console.info(`databaseUpdateCount=${databaseUpdateCount}`);
+              } else if (msg.type === 'text' && msg.text?.body) {
+                // Customer sent a text reply (e.g. feedback comment or question)
+                const fromPhone = msg.from;
+                const replyMessageId = msg.id;
+                const replyContextWamid = msg.context?.id;
                 await processCustomerFeedbackResponse({
                   replyMessageId,
                   replyContextWamid,
                   fromPhone,
-                  buttonText,
-                  buttonPayload,
-                  textBody,
+                  textBody: msg.text.body,
                 });
               }
             }
@@ -163,6 +309,7 @@ export async function handleWhatsAppWebhookEvent(req: any, res: any) {
         }
       }
     }
+
     return res.status(200).send('EVENT_RECEIVED');
   } catch (err: any) {
     console.error('[WhatsAppWebhook] Error handling webhook payload:', err.message);

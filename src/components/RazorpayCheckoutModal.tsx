@@ -40,8 +40,38 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
   onClose,
   onOrderCompleted,
 }) => {
-  const { grandTotal, customerDetails, createOrder, orderType } = useStore();
-  const { restaurantId, restaurantSlug, restaurantName } = useRestaurant();
+  const { grandTotal, customerDetails, createOrder, orderType, qrSession } = useStore();
+  const { restaurantId, restaurantSlug, restaurantName, isCashEnabled } = useRestaurant();
+  const [serverCodEligible, setServerCodEligible] = useState<boolean | null>(null);
+
+  // Strict Multi-tenant COD Restrictions:
+  // Completely disabled for Table QR, Dine-in, Counter QR, POS Counter in online checkout, and Takeaway.
+  // Only available for regular delivery orders when enabled by the restaurant tenant.
+  const normalizedOrderType = (orderType || '').toLowerCase().trim();
+  const normalizedSource = (qrSession?.source || '').toLowerCase().trim();
+  const normalizedQrType = (qrSession?.type || '').toLowerCase().trim();
+  const hasTableNumber = Boolean(customerDetails?.tableNumber || qrSession?.tableNumber || qrSession?.tableId);
+
+  // Strict Multi-Tenant COD Restrictions:
+  // - Table QR / Dine-in: Disabled
+  // - Counter QR: Disabled
+  // - POS Counter: Disabled in customer online checkout
+  // - Takeaway: Disabled
+  // - Online Delivery: Available only if enabled in restaurant settings
+  const isDisallowedEntry =
+    normalizedSource === 'table_qr' ||
+    normalizedSource === 'counter_qr' ||
+    normalizedSource === 'pos_counter' ||
+    normalizedQrType === 'table' ||
+    normalizedQrType === 'counter' ||
+    normalizedQrType === 'pos' ||
+    hasTableNumber;
+
+  const isCodEligible = Boolean(
+    normalizedOrderType === 'delivery' &&
+    !isDisallowedEntry &&
+    (serverCodEligible !== null ? serverCodEligible : isCashEnabled)
+  );
 
   // Payment route determined authoritatively by server
   const [paymentRoute, setPaymentRoute] = useState<'DIRECT_RESTAURANT_UPI' | 'MARKETPLACE_PROVIDER' | null>(null);
@@ -81,6 +111,13 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
   const [razorpayAvailable, setRazorpayAvailable] = useState<boolean | null>(null);
   const [pendingAppOrder, setPendingAppOrder] = useState<any>(null);
 
+  // Automatically switch away from COD if order becomes ineligible
+  useEffect(() => {
+    if (activeTab === 'cod' && !isCodEligible) {
+      setActiveTab('standard');
+    }
+  }, [activeTab, isCodEligible]);
+
   // Window resize listener for responsive mobile flow
   useEffect(() => {
     const handleResize = () => {
@@ -103,11 +140,18 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
         restaurantId,
         restaurantSlug,
         orderType,
+        entrySource: qrSession?.source,
         amount: grandTotal,
       }),
     })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
+        if (data.isCodEligible !== undefined) {
+          setServerCodEligible(Boolean(data.isCodEligible));
+        } else if (data.isCashEnabled !== undefined) {
+          setServerCodEligible(Boolean(data.isCashEnabled));
+        }
+
         if (data.route === 'DIRECT_RESTAURANT_UPI' && data.directUpi) {
           setPaymentRoute('DIRECT_RESTAURANT_UPI');
           setDirectUpiData(data.directUpi);
@@ -152,7 +196,7 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
       .finally(() => {
         setIsLoadingRoute(false);
       });
-  }, [isOpen, restaurantId, restaurantSlug, orderType, grandTotal]);
+  }, [isOpen, restaurantId, restaurantSlug, orderType, qrSession?.source, grandTotal]);
 
   // Server-side authoritative status polling:
   // Polls GET /api/payments/:paymentId/status every 2.5 seconds
@@ -434,7 +478,7 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
             }
 
             // Step 6: Backend signature verified! Order status is confirmed and marked paid
-            setProcessingStep('Payment Verified! Confirming order with MOZZ Kitchen...');
+            setProcessingStep(`Payment Verified! Confirming order with ${restaurantName || 'Kitchen'}...`);
             const confirmedOrder = {
               ...activeOrder,
               paymentStatus: 'paid',
@@ -485,6 +529,16 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
             sequence: ['block.preferred'],
           },
         };
+      } else {
+        // Enforce online-only options (disable paylater/cash instruments in Razorpay configuration)
+        options.config = {
+          display: {
+            hide: [{ method: 'paylater' }],
+            preferences: {
+              show_default_blocks: true,
+            },
+          },
+        };
       }
 
       const rzpInstance = new window.Razorpay(options);
@@ -508,6 +562,11 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
     try {
       setErrorMessage('');
 
+      if (!isCodEligible) {
+        setErrorMessage('Cash on Delivery is only available for online delivery orders.');
+        return;
+      }
+
       if (orderType === 'delivery') {
         if (typeof customerDetails.latitude !== 'number' || typeof customerDetails.longitude !== 'number') {
           setErrorMessage('Delivery orders require verified GPS coordinates. Please close this window and tap "Use My Current Location".');
@@ -516,7 +575,7 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
       }
 
       setIsProcessing(true);
-      setProcessingStep('Confirming COD order with MOZZ Kitchen...');
+      setProcessingStep(`Confirming COD order with ${restaurantName || 'Kitchen'}...`);
 
       const createdOrder = await createOrder('cod');
 
@@ -543,9 +602,39 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
     }
   };
 
+  const getProceedButtonText = () => {
+    const formattedAmount = grandTotal.toFixed(2);
+    if (activeTab === 'cod') {
+      return `Proceed to Pay ₹${formattedAmount} on Delivery`;
+    }
+    return `Proceed to Pay ₹${formattedAmount}`;
+  };
+
+  const getProceedButtonIcon = () => {
+    if (activeTab === 'cod') return <Banknote className="w-4 h-4 text-emerald-300" />;
+    if (activeTab === 'upi') return <Smartphone className="w-4 h-4 text-rose-200" />;
+    if (activeTab === 'card') return <CreditCard className="w-4 h-4 text-rose-200" />;
+    if (activeTab === 'netbanking') return <Building2 className="w-4 h-4 text-rose-200" />;
+    return <Zap className="w-4 h-4 text-amber-300" />;
+  };
+
+  const handleProceedToPayment = () => {
+    if (activeTab === 'cod') {
+      handleConfirmCodOrder();
+    } else if (activeTab === 'upi') {
+      launchRazorpayCheckout({ method: 'upi' });
+    } else if (activeTab === 'card') {
+      launchRazorpayCheckout({ method: 'card' });
+    } else if (activeTab === 'netbanking') {
+      launchRazorpayCheckout({ method: 'netbanking' });
+    } else {
+      launchRazorpayCheckout();
+    }
+  };
+
   return (
-    <div id="razorpay-checkout-modal-container" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
-      <div id="razorpay-checkout-modal-card" className="bg-white border border-slate-200 rounded-3xl max-w-2xl w-full max-h-[92vh] flex flex-col text-slate-800 shadow-2xl overflow-hidden relative">
+    <div id="razorpay-checkout-modal-container" className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4 animate-in fade-in duration-150">
+      <div id="razorpay-checkout-modal-card" className="bg-white border border-slate-200 rounded-t-3xl sm:rounded-3xl max-w-2xl w-full max-h-[92vh] sm:max-h-[88vh] flex flex-col text-slate-800 shadow-2xl overflow-hidden relative">
         {/* Processing / Success Full Overlay */}
         {isProcessing && (
           <div id="payment-processing-overlay" className="absolute inset-0 z-50 bg-white/95 flex flex-col items-center justify-center p-6 text-center space-y-4">
@@ -574,14 +663,14 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
               </span>
               <h3 className="text-2xl font-black text-slate-900">Order Confirmed!</h3>
               <p className="text-xs text-slate-500">
-                Sent to MOZZ Kitchen for Korean-Style baking & wok-toss.
+                Sent to {restaurantName || 'Kitchen'} for fresh preparation.
               </p>
             </div>
           </div>
         )}
 
         {/* Modal Header */}
-        <div className="bg-slate-900 p-5 border-b border-slate-800 flex items-center justify-between text-white">
+        <div className="shrink-0 bg-slate-900 p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between text-white">
           <div className="flex items-center gap-3">
             {paymentRoute === 'DIRECT_RESTAURANT_UPI' ? (
               <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center font-black text-white text-lg shadow-xs">
@@ -606,7 +695,7 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-300">
-                Merchant: <strong className="text-white">{directUpiData?.merchantDisplayName || restaurantName || 'MOZZ Chinese & Pizzateria'}</strong>
+                Merchant: <strong className="text-white">{directUpiData?.merchantDisplayName || restaurantName || 'Starters4U Verified Kitchen'}</strong>
               </p>
             </div>
           </div>
@@ -628,7 +717,7 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
         </div>
 
         {/* Customer Notification Bar */}
-        <div className="bg-emerald-50/90 px-5 py-2 border-b border-emerald-100 flex flex-wrap items-center justify-between gap-1 text-xs text-emerald-900">
+        <div className="shrink-0 bg-emerald-50/90 px-4 sm:px-5 py-2 border-b border-emerald-100 flex flex-wrap items-center justify-between gap-1 text-xs text-emerald-900">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <span>
@@ -649,7 +738,7 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
 
         {/* Error Notification Banner */}
         {errorMessage && (
-          <div id="payment-error-banner" className="p-3 bg-rose-50 border-b border-rose-200 text-rose-700 text-xs font-semibold flex items-center justify-between px-5">
+          <div id="payment-error-banner" className="shrink-0 p-3 bg-rose-50 border-b border-rose-200 text-rose-700 text-xs font-semibold flex items-center justify-between px-5">
             <div className="flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
               <span>{errorMessage}</span>
@@ -1084,280 +1173,279 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
           </div>
         ) : (
           /* MARKETPLACE PROVIDER (RAZORPAY) FLOW - USED FOR DELIVERY OR WHEN DIRECT UPI NOT ENABLED */
-          <div className="grid grid-cols-1 md:grid-cols-12 flex-1 overflow-hidden">
-            {/* Left Payment Options Sidebar */}
-            <div className="md:col-span-4 bg-slate-50 border-r border-slate-200 p-3 space-y-1 text-xs">
-              <button
-                id="tab-razorpay-standard"
-                onClick={() => setActiveTab('standard')}
-                className={`w-full p-3 rounded-xl flex items-center gap-2.5 transition text-left ${
-                  activeTab === 'standard'
-                    ? 'bg-blue-600 text-white font-bold shadow-xs'
-                    : 'text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <Zap className="w-4 h-4 text-amber-300" />
-                <div>
-                  <div className="flex items-center gap-1">
-                    <span>Razorpay Standard</span>
-                    <span className="text-[9px] bg-amber-400 text-slate-950 px-1 rounded font-black">FAST</span>
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            {/* Split layout: left sidebar on desktop, horizontal scrollable tabs on mobile */}
+            <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
+              {/* Payment Methods Navigation */}
+              <div className="flex md:flex-col overflow-x-auto md:overflow-y-auto shrink-0 md:w-56 bg-slate-50 border-b md:border-b-0 md:border-r border-slate-200 p-2 sm:p-3 gap-1.5 text-xs">
+                <button
+                  type="button"
+                  id="tab-razorpay-standard"
+                  onClick={() => setActiveTab('standard')}
+                  className={`shrink-0 md:shrink md:w-full p-2.5 sm:p-3 rounded-xl flex items-center gap-2.5 transition text-left cursor-pointer ${
+                    activeTab === 'standard'
+                      ? 'bg-blue-600 text-white font-bold shadow-xs'
+                      : 'text-slate-700 hover:bg-slate-100 bg-white md:bg-transparent border border-slate-200 md:border-transparent'
+                  }`}
+                >
+                  <Zap className="w-4 h-4 text-amber-300 shrink-0" />
+                  <div className="whitespace-nowrap">
+                    <div className="flex items-center gap-1">
+                      <span>Razorpay Standard</span>
+                      <span className="text-[9px] bg-amber-400 text-slate-950 px-1 rounded font-black">FAST</span>
+                    </div>
+                    <div className={`text-[10px] ${activeTab === 'standard' ? 'text-blue-100' : 'text-slate-400'}`}>
+                      UPI, Cards, NetBanking
+                    </div>
                   </div>
-                  <div className={`text-[10px] ${activeTab === 'standard' ? 'text-blue-100' : 'text-slate-400'}`}>
-                    UPI, Cards, NetBanking
-                  </div>
-                </div>
-              </button>
+                </button>
 
-              <button
-                id="tab-razorpay-upi"
-                onClick={() => setActiveTab('upi')}
-                className={`w-full p-3 rounded-xl flex items-center gap-2.5 transition text-left ${
-                  activeTab === 'upi'
-                    ? 'bg-rose-600 text-white font-bold shadow-xs'
-                    : 'text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <QrCode className="w-4 h-4" />
-                <div>
-                  <div>UPI & QR</div>
-                  <div className={`text-[10px] ${activeTab === 'upi' ? 'text-rose-100' : 'text-slate-400'}`}>
-                    GPay, PhonePe, Paytm
+                <button
+                  type="button"
+                  id="tab-razorpay-upi"
+                  onClick={() => setActiveTab('upi')}
+                  className={`shrink-0 md:shrink md:w-full p-2.5 sm:p-3 rounded-xl flex items-center gap-2.5 transition text-left cursor-pointer ${
+                    activeTab === 'upi'
+                      ? 'bg-rose-600 text-white font-bold shadow-xs'
+                      : 'text-slate-700 hover:bg-slate-100 bg-white md:bg-transparent border border-slate-200 md:border-transparent'
+                  }`}
+                >
+                  <QrCode className="w-4 h-4 shrink-0" />
+                  <div className="whitespace-nowrap">
+                    <div>UPI & QR</div>
+                    <div className={`text-[10px] ${activeTab === 'upi' ? 'text-rose-100' : 'text-slate-400'}`}>
+                      GPay, PhonePe, Paytm
+                    </div>
                   </div>
-                </div>
-              </button>
+                </button>
 
-              <button
-                id="tab-razorpay-card"
-                onClick={() => setActiveTab('card')}
-                className={`w-full p-3 rounded-xl flex items-center gap-2.5 transition text-left ${
-                  activeTab === 'card'
-                    ? 'bg-rose-600 text-white font-bold shadow-xs'
-                    : 'text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <CreditCard className="w-4 h-4" />
-                <div>
-                  <div>Cards</div>
-                  <div className={`text-[10px] ${activeTab === 'card' ? 'text-rose-100' : 'text-slate-400'}`}>
-                    Visa, Mastercard, RuPay
+                <button
+                  type="button"
+                  id="tab-razorpay-card"
+                  onClick={() => setActiveTab('card')}
+                  className={`shrink-0 md:shrink md:w-full p-2.5 sm:p-3 rounded-xl flex items-center gap-2.5 transition text-left cursor-pointer ${
+                    activeTab === 'card'
+                      ? 'bg-rose-600 text-white font-bold shadow-xs'
+                      : 'text-slate-700 hover:bg-slate-100 bg-white md:bg-transparent border border-slate-200 md:border-transparent'
+                  }`}
+                >
+                  <CreditCard className="w-4 h-4 shrink-0" />
+                  <div className="whitespace-nowrap">
+                    <div>Cards</div>
+                    <div className={`text-[10px] ${activeTab === 'card' ? 'text-rose-100' : 'text-slate-400'}`}>
+                      Visa, Mastercard, RuPay
+                    </div>
                   </div>
-                </div>
-              </button>
+                </button>
 
-              <button
-                id="tab-razorpay-netbanking"
-                onClick={() => setActiveTab('netbanking')}
-                className={`w-full p-3 rounded-xl flex items-center gap-2.5 transition text-left ${
-                  activeTab === 'netbanking'
-                    ? 'bg-rose-600 text-white font-bold shadow-xs'
-                    : 'text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <Building2 className="w-4 h-4" />
-                <div>
-                  <div>Net Banking</div>
-                  <div className={`text-[10px] ${activeTab === 'netbanking' ? 'text-rose-100' : 'text-slate-400'}`}>
-                    All Major Indian Banks
+                <button
+                  type="button"
+                  id="tab-razorpay-netbanking"
+                  onClick={() => setActiveTab('netbanking')}
+                  className={`shrink-0 md:shrink md:w-full p-2.5 sm:p-3 rounded-xl flex items-center gap-2.5 transition text-left cursor-pointer ${
+                    activeTab === 'netbanking'
+                      ? 'bg-rose-600 text-white font-bold shadow-xs'
+                      : 'text-slate-700 hover:bg-slate-100 bg-white md:bg-transparent border border-slate-200 md:border-transparent'
+                  }`}
+                >
+                  <Building2 className="w-4 h-4 shrink-0" />
+                  <div className="whitespace-nowrap">
+                    <div>Net Banking</div>
+                    <div className={`text-[10px] ${activeTab === 'netbanking' ? 'text-rose-100' : 'text-slate-400'}`}>
+                      All Major Indian Banks
+                    </div>
                   </div>
-                </div>
-              </button>
+                </button>
 
-              <button
-                id="tab-razorpay-cod"
-                onClick={() => setActiveTab('cod')}
-                className={`w-full p-3 rounded-xl flex items-center gap-2.5 transition text-left ${
-                  activeTab === 'cod'
-                    ? 'bg-rose-600 text-white font-bold shadow-xs'
-                    : 'text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <Banknote className="w-4 h-4" />
-                <div>
-                  <div>Cash on Delivery</div>
-                  <div className={`text-[10px] ${activeTab === 'cod' ? 'text-rose-100' : 'text-slate-400'}`}>
-                    Pay cash upon delivery
+                {isCodEligible && (
+                  <button
+                    type="button"
+                    id="tab-razorpay-cod"
+                    onClick={() => setActiveTab('cod')}
+                    className={`shrink-0 md:shrink md:w-full p-2.5 sm:p-3 rounded-xl flex items-center gap-2.5 transition text-left cursor-pointer ${
+                      activeTab === 'cod'
+                        ? 'bg-rose-600 text-white font-bold shadow-xs'
+                        : 'text-slate-700 hover:bg-slate-100 bg-white md:bg-transparent border border-slate-200 md:border-transparent'
+                    }`}
+                  >
+                    <Banknote className="w-4 h-4 shrink-0" />
+                    <div className="whitespace-nowrap">
+                      <div>Cash on Delivery</div>
+                      <div className={`text-[10px] ${activeTab === 'cod' ? 'text-rose-100' : 'text-slate-400'}`}>
+                        Pay cash upon delivery
+                      </div>
+                    </div>
+                  </button>
+                )}
+              </div>
+
+              {/* Right Tab Content View: Scrolls vertically */}
+              <div className="flex-1 min-h-0 p-4 sm:p-6 overflow-y-auto bg-white">
+                {/* 0. Razorpay Standard Tab */}
+                {activeTab === 'standard' && (
+                  <div className="space-y-4 text-center py-2">
+                    <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-200 text-blue-600 flex items-center justify-center mx-auto text-2xl shadow-xs">
+                      ⚡
+                    </div>
+                    <div>
+                      <h4 className="text-base font-bold text-slate-900">Razorpay One-Click Checkout</h4>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                        Pay securely using Google Pay, PhonePe, Paytm, UPI, Debit/Credit Cards or NetBanking.
+                      </p>
+                    </div>
+
+                    <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-left space-y-2 max-w-md mx-auto">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-slate-500">Merchant:</span>
+                        <span className="font-bold text-slate-900">{restaurantName || 'Verified Partner Kitchen'}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-slate-500">Payment Protection:</span>
+                        <span className="font-semibold text-emerald-600 flex items-center gap-1">
+                          <ShieldCheck className="w-3.5 h-3.5" /> 256-bit Bank Verified
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-xs pt-1.5 border-t border-slate-200">
+                        <span className="text-slate-700 font-bold">Total Bill:</span>
+                        <span className="font-black text-rose-600 text-sm">₹{grandTotal.toFixed(2)}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-center gap-2 pt-1 text-[11px] text-slate-500">
+                      <span className="px-2.5 py-1 bg-slate-100 rounded-lg font-medium">⚡ Instant Approval</span>
+                      <span className="px-2.5 py-1 bg-slate-100 rounded-lg font-medium">🛡️ Zero Surcharge</span>
+                      <span className="px-2.5 py-1 bg-slate-100 rounded-lg font-medium">🔒 PCI-DSS Certified</span>
+                    </div>
                   </div>
-                </div>
-              </button>
+                )}
+
+                {/* 1. UPI & QR Tab */}
+                {activeTab === 'upi' && (
+                  <div className="space-y-4 text-center py-2">
+                    <div className="w-14 h-14 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto text-2xl shadow-xs">
+                      <QrCode className="w-7 h-7" />
+                    </div>
+                    <div>
+                      <h4 className="text-base font-bold text-slate-900">UPI & QR Code Payment</h4>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                        Pay instantly via Google Pay, PhonePe, Paytm, BHIM, or any UPI App through Razorpay.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 max-w-sm mx-auto">
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700">
+                        Google Pay
+                      </div>
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700">
+                        PhonePe
+                      </div>
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700">
+                        Paytm UPI
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-slate-400 max-w-xs mx-auto">
+                      Tap the button below to launch UPI app selection or scan QR code securely.
+                    </p>
+                  </div>
+                )}
+
+                {/* 2. Debit & Credit Cards */}
+                {activeTab === 'card' && (
+                  <div className="space-y-4 text-center py-2">
+                    <div className="w-14 h-14 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto text-2xl shadow-xs">
+                      <CreditCard className="w-7 h-7" />
+                    </div>
+                    <div>
+                      <h4 className="text-base font-bold text-slate-900">Debit & Credit Cards</h4>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                        Visa, MasterCard, RuPay, Maestro and Diners Club cards accepted with OTP 3D-Secure verification.
+                      </p>
+                    </div>
+
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 text-xs text-slate-600 space-y-1 max-w-sm mx-auto text-left">
+                      <p className="font-semibold text-slate-800">Bank-Grade 3D Secure Protection</p>
+                      <p className="text-[11px] text-slate-500">Your card credentials are encrypted directly with the RBI-authorized gateway.</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. NetBanking */}
+                {activeTab === 'netbanking' && (
+                  <div className="space-y-4 text-center py-2">
+                    <div className="w-14 h-14 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto text-2xl shadow-xs">
+                      <Building2 className="w-7 h-7" />
+                    </div>
+                    <div>
+                      <h4 className="text-base font-bold text-slate-900">Net Banking</h4>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                        Over 50+ Indian banks supported including HDFC, ICICI, SBI, Axis, and Kotak.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 max-w-sm mx-auto text-xs font-semibold text-slate-700">
+                      <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl">HDFC</div>
+                      <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl">ICICI</div>
+                      <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl">SBI</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. Cash on Delivery (COD) */}
+                {activeTab === 'cod' && isCodEligible && (
+                  <div className="text-center space-y-4 py-3">
+                    <div className="w-14 h-14 rounded-full bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto text-2xl shadow-2xs">
+                      💵
+                    </div>
+                    <div>
+                      <h4 className="text-base font-bold text-slate-900">Cash on Delivery (COD)</h4>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                        Keep exact cash of ₹{grandTotal.toFixed(2)} ready at delivery. UPI on delivery is also accepted by the delivery rider.
+                      </p>
+                    </div>
+
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 text-left max-w-sm mx-auto">
+                      <strong>Delivery Notice:</strong> Please ensure someone is available at your delivery location to receive the order and hand over payment.
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* Right Tab Content View */}
-            <div className="md:col-span-8 p-5 sm:p-6 overflow-y-auto max-h-[60vh] md:max-h-full bg-white">
-              {/* 0. Razorpay Standard Tab */}
-              {activeTab === 'standard' && (
-                <div className="space-y-5 text-center py-2">
-                  <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-200 text-blue-600 flex items-center justify-center mx-auto text-2xl shadow-xs">
-                    ⚡
-                  </div>
-                  <div>
-                    <h4 className="text-base font-bold text-slate-900">Razorpay One-Click Checkout</h4>
-                    <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                      Pay securely using Google Pay, PhonePe, Paytm, UPI, Debit/Credit Cards or NetBanking.
-                    </p>
-                  </div>
-
-                  <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-left space-y-2">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-slate-500">Merchant:</span>
-                      <span className="font-bold text-slate-900">{restaurantName || 'MOZZ Chinese & Pizzateria'}</span>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                      <span className="text-slate-500">Payment Protection:</span>
-                      <span className="font-semibold text-emerald-600 flex items-center gap-1">
-                        <ShieldCheck className="w-3.5 h-3.5" /> 256-bit Bank Verified
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-xs pt-1 border-t border-slate-200">
-                      <span className="text-slate-700 font-bold">Total Bill:</span>
-                      <span className="font-black text-rose-600 text-sm">₹{grandTotal.toFixed(2)}</span>
-                    </div>
-                  </div>
-
-                  <button
-                    id="btn-pay-razorpay-standard"
-                    onClick={() => launchRazorpayCheckout()}
-                    disabled={isProcessing}
-                    className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-blue-600 via-rose-600 to-amber-600 hover:opacity-95 text-white font-bold text-sm shadow-md shadow-blue-950/20 flex items-center justify-center gap-2 transition active:scale-[0.99] disabled:opacity-50"
-                  >
-                    <Zap className="w-4 h-4 text-amber-300" />
-                    <span>Pay ₹{grandTotal.toFixed(2)} with Razorpay</span>
-                    <ExternalLink className="w-3.5 h-3.5 opacity-80" />
-                  </button>
-                </div>
-              )}
-
-              {/* 1. UPI & QR Tab */}
-              {activeTab === 'upi' && (
-                <div className="space-y-5 text-center py-2">
-                  <div className="w-16 h-16 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto text-2xl shadow-xs">
-                    <QrCode className="w-8 h-8" />
-                  </div>
-                  <div>
-                    <h4 className="text-base font-bold text-slate-900">UPI & QR Code Payment</h4>
-                    <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                      Pay instantly via Google Pay, PhonePe, Paytm, BHIM, or any UPI App through Razorpay.
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2 max-w-sm mx-auto">
-                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700">
-                      Google Pay
-                    </div>
-                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700">
-                      PhonePe
-                    </div>
-                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700">
-                      Paytm UPI
-                    </div>
-                  </div>
-
-                  <button
-                    id="btn-pay-razorpay-upi"
-                    onClick={() => launchRazorpayCheckout({ method: 'upi' })}
-                    disabled={isProcessing}
-                    className="w-full py-3.5 px-4 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md shadow-rose-600/20 flex items-center justify-center gap-2 transition disabled:opacity-50"
-                  >
-                    <Smartphone className="w-4 h-4" />
-                    <span>Pay ₹{grandTotal.toFixed(2)} via UPI Gateway</span>
-                  </button>
-                </div>
-              )}
-
-              {/* 2. Debit & Credit Cards */}
-              {activeTab === 'card' && (
-                <div className="space-y-5 text-center py-2">
-                  <div className="w-16 h-16 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto text-2xl shadow-xs">
-                    <CreditCard className="w-8 h-8" />
-                  </div>
-                  <div>
-                    <h4 className="text-base font-bold text-slate-900">Debit & Credit Cards</h4>
-                    <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                      Visa, MasterCard, RuPay, Maestro and Diners Club cards accepted with OTP 3D-Secure verification.
-                    </p>
-                  </div>
-
-                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 text-xs text-slate-600 space-y-1">
-                    <p className="font-semibold text-slate-800">Bank-Grade 3D Secure Protection</p>
-                    <p className="text-[11px] text-slate-500">Your card credentials are encrypted directly with the RBI-authorized gateway.</p>
-                  </div>
-
-                  <button
-                    id="btn-pay-razorpay-card"
-                    onClick={() => launchRazorpayCheckout({ method: 'card' })}
-                    disabled={isProcessing}
-                    className="w-full py-3.5 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md shadow-rose-600/20 flex items-center justify-center gap-2 transition disabled:opacity-50"
-                  >
-                    <CreditCard className="w-4 h-4" />
-                    <span>Pay ₹{grandTotal.toFixed(2)} via Secure Card</span>
-                  </button>
-                </div>
-              )}
-
-              {/* 3. NetBanking */}
-              {activeTab === 'netbanking' && (
-                <div className="space-y-5 text-center py-2">
-                  <div className="w-16 h-16 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto text-2xl shadow-xs">
-                    <Building2 className="w-8 h-8" />
-                  </div>
-                  <div>
-                    <h4 className="text-base font-bold text-slate-900">Net Banking</h4>
-                    <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                      Over 50+ Indian banks supported including HDFC, ICICI, SBI, Axis, and Kotak.
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2 max-w-sm mx-auto text-xs font-semibold text-slate-700">
-                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl">HDFC</div>
-                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl">ICICI</div>
-                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl">SBI</div>
-                  </div>
-
-                  <button
-                    id="btn-pay-razorpay-netbanking"
-                    onClick={() => launchRazorpayCheckout({ method: 'netbanking' })}
-                    disabled={isProcessing}
-                    className="w-full py-3.5 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md shadow-rose-600/20 flex items-center justify-center gap-2 transition disabled:opacity-50"
-                  >
-                    <Building2 className="w-4 h-4" />
-                    <span>Proceed to NetBanking Portal</span>
-                  </button>
-                </div>
-              )}
-
-              {/* 4. Cash on Delivery (COD) */}
-              {activeTab === 'cod' && (
-                <div className="text-center space-y-4 py-3">
-                  <div className="w-14 h-14 rounded-full bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto text-2xl shadow-2xs">
-                    💵
-                  </div>
-                  <div>
-                    <h4 className="text-base font-bold text-slate-900">Cash on Delivery (COD)</h4>
-                    <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                      Keep exact cash of ₹{grandTotal.toFixed(2)} ready at delivery. UPI on delivery is also accepted by the delivery rider.
-                    </p>
-                  </div>
-
-                  <button
-                    id="btn-confirm-cod-order"
-                    onClick={handleConfirmCodOrder}
-                    disabled={isProcessing}
-                    className="w-full py-3.5 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md shadow-rose-600/20 transition disabled:opacity-50"
-                  >
-                    Confirm Order with Cash on Delivery
-                  </button>
-                </div>
-              )}
+            {/* Sticky / Fixed Footer with Proceed to Payment Button */}
+            <div className="shrink-0 p-3.5 sm:p-4 bg-white border-t border-slate-200 shadow-[0_-4px_16px_rgba(0,0,0,0.06)] pb-[max(0.875rem,env(safe-area-inset-bottom))]">
+              <button
+                type="button"
+                id="btn-proceed-to-payment"
+                data-testid="proceed-to-payment"
+                onClick={handleProceedToPayment}
+                disabled={isProcessing}
+                className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-blue-600 via-rose-600 to-amber-600 hover:opacity-95 text-white font-black text-sm sm:text-base shadow-lg shadow-blue-950/20 flex items-center justify-center gap-2 transition active:scale-[0.99] disabled:opacity-50 cursor-pointer"
+              >
+                {getProceedButtonIcon()}
+                <span>{getProceedButtonText()}</span>
+                <ArrowRight className="w-4 h-4 ml-1 opacity-90" />
+              </button>
+              <div className="flex items-center justify-between mt-2 px-1 text-[11px] text-slate-500">
+                <span className="flex items-center gap-1">
+                  <Lock className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>256-bit RBI Encrypted Gateway</span>
+                </span>
+                <span className="font-semibold text-slate-700 truncate max-w-[200px]">
+                  {restaurantName || 'Starters4U Verified'}
+                </span>
+              </div>
             </div>
           </div>
         )}
 
         {/* Footer Security Badge */}
-        <div className="p-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-[11px] text-slate-500 px-5">
+        <div className="hidden sm:flex shrink-0 p-3 bg-slate-50 border-t border-slate-200 items-center justify-between text-[11px] text-slate-500 px-5">
           <span className="flex items-center gap-1.5">
             <Lock className="w-3.5 h-3.5 text-emerald-600" />
             PCI-DSS Level 1 Certified 256-bit Encryption
           </span>
-          <span className="text-slate-700 font-semibold">MOZZ Kitchens Pvt Ltd</span>
+          <span className="text-slate-700 font-semibold">{restaurantName || 'Starters4U Verified Kitchen'}</span>
         </div>
       </div>
     </div>
