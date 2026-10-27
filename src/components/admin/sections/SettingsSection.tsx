@@ -73,6 +73,7 @@ export const SettingsSection: React.FC = () => {
   // WhatsApp Coexistence Integration State
   const [whatsAppIntegration, setWhatsAppIntegration] = useState<RestaurantWhatsAppIntegration | null>(null);
   const [whatsAppConfig, setWhatsAppConfig] = useState<{ appId: string; configId: string } | null>(null);
+  const [whatsappMobileNumber, setWhatsappMobileNumber] = useState('');
   const [isConnectingWhatsApp, setIsConnectingWhatsApp] = useState(false);
   const [isDisconnectingWhatsApp, setIsDisconnectingWhatsApp] = useState(false);
   const [whatsAppError, setWhatsAppError] = useState<string | null>(null);
@@ -190,7 +191,14 @@ export const SettingsSection: React.FC = () => {
 
         if (waStatusRes.ok) {
           const d = await waStatusRes.json();
-          if (d) setWhatsAppIntegration(d);
+          if (d) {
+            setWhatsAppIntegration(d);
+            if (d.whatsappBusinessNumber) {
+              const clean = d.whatsappBusinessNumber.replace(/\D/g, '');
+              const tenDigits = clean.length >= 10 ? clean.slice(-10) : clean;
+              setWhatsappMobileNumber(tenDigits);
+            }
+          }
         }
 
         if (waCfgRes.ok) {
@@ -261,9 +269,32 @@ export const SettingsSection: React.FC = () => {
   const handleConnectWhatsApp = async () => {
     setWhatsAppError(null);
     setWhatsAppSuccess(null);
+
+    const cleanNumber = whatsappMobileNumber.replace(/\D/g, '');
+    if (cleanNumber.length !== 10) {
+      setWhatsAppError('Please enter a valid 10-digit mobile number before connecting.');
+      return;
+    }
+
     setIsConnectingWhatsApp(true);
 
     try {
+      // Store the normalized number as draft against the restaurant record
+      // (does not mark CONNECTED, status stays DISCONNECTED/NOT_CONNECTED)
+      try {
+        await adminFetch('/api/admin/whatsapp/business-number', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            phoneNumber: cleanNumber,
+          }),
+        });
+      } catch {
+        // Continue even if pre-save draft failed, as onboard-coexistence will also persist it
+      }
+
       let config = whatsAppConfig;
       if (!config || !config.configId) {
         const cfgRes = await adminFetch('/api/admin/whatsapp/config');
@@ -304,6 +335,7 @@ export const SettingsSection: React.FC = () => {
                   wabaId: capturedSessionRef.current.wabaId,
                   phoneNumberId: capturedSessionRef.current.phoneNumberId,
                   businessId: capturedSessionRef.current.businessId,
+                  whatsappBusinessNumber: cleanNumber,
                 }),
               });
 
@@ -1277,7 +1309,7 @@ export const SettingsSection: React.FC = () => {
                   <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
                     <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Phone</div>
                     <div className="font-mono font-bold text-slate-900 text-sm mt-1">
-                      {whatsAppIntegration.displayPhoneNumber || profile?.phone || 'Connected'}
+                      {whatsAppIntegration.whatsappBusinessNumber || whatsAppIntegration.displayPhoneNumber || profile?.phone || 'Connected'}
                     </div>
                     {whatsAppIntegration.verifiedName && (
                       <div className="text-[11px] text-slate-500 mt-1 truncate">
@@ -1331,12 +1363,59 @@ export const SettingsSection: React.FC = () => {
                   </ul>
                 </div>
 
+                {/* WhatsApp Business Number Input Form */}
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                      <Smartphone className="w-4 h-4 text-emerald-600" />
+                      <span>WhatsApp Business Number</span>
+                    </h4>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">
+                        Country
+                      </label>
+                      <div className="flex items-center px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 font-medium text-slate-800 text-xs shadow-2xs">
+                        <span>India (+91)</span>
+                      </div>
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">
+                        Mobile Number
+                      </label>
+                      <input
+                        type="tel"
+                        value={whatsappMobileNumber}
+                        onChange={(e) => {
+                          const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                          setWhatsappMobileNumber(val);
+                          if (whatsAppError) setWhatsAppError(null);
+                        }}
+                        placeholder="9032670077"
+                        maxLength={10}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 font-mono text-sm font-semibold text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 tracking-wide shadow-2xs"
+                      />
+                      <div className="flex items-center justify-between text-[11px] text-slate-500 mt-1">
+                        <span>Example: 9032670077</span>
+                        <span className="font-mono text-slate-400">{whatsappMobileNumber.length}/10</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-slate-500">
+                    Enter the WhatsApp Business number currently used by your restaurant.
+                  </p>
+                </div>
+
                 <div className="space-y-3 pt-1">
                   <button
                     type="button"
                     onClick={handleConnectWhatsApp}
-                    disabled={isConnectingWhatsApp}
-                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-bold text-xs shadow-sm hover:shadow transition flex items-center justify-center gap-2 disabled:opacity-50"
+                    disabled={isConnectingWhatsApp || whatsappMobileNumber.replace(/\D/g, '').length !== 10}
+                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-bold text-xs shadow-sm hover:shadow transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isConnectingWhatsApp ? (
                       <>

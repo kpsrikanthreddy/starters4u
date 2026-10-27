@@ -773,6 +773,7 @@ CREATE TABLE IF NOT EXISTS restaurant_whatsapp_integrations (
     phone_number_id VARCHAR(100),
     business_id VARCHAR(100),
     display_phone_number VARCHAR(50),
+    whatsapp_business_number VARCHAR(50),
     verified_name VARCHAR(255),
     quality_rating VARCHAR(50),
     status VARCHAR(50) NOT NULL DEFAULT 'CONNECTED' CHECK (status IN ('CONNECTED', 'DISCONNECTED', 'PENDING')),

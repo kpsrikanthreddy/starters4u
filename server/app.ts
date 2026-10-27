@@ -1321,6 +1321,27 @@ export function createApp(): express.Application {
   });
 
   app.post(
+    '/api/admin/whatsapp/business-number',
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const { phoneNumber, whatsappBusinessNumber } = req.body;
+        const raw = phoneNumber || whatsappBusinessNumber;
+        if (!raw) {
+          return res.status(400).json({ error: 'Mobile number is required' });
+        }
+        const updated = await whatsappCoexistenceService.saveBusinessNumber(restaurantId, raw);
+        res.json({ success: true, integration: updated });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  app.post(
     '/api/admin/whatsapp/onboard-coexistence',
     requireAuth,
     requireRestaurantTenant,
@@ -1328,26 +1349,43 @@ export function createApp(): express.Application {
     async (req, res) => {
       try {
         const restaurantId = req.tenant.restaurantId;
-        const { code, waba_id, phone_number_id, business_id, session_data } = req.body;
+        const {
+          code,
+          waba_id,
+          wabaId,
+          phone_number_id,
+          phoneNumberId,
+          business_id,
+          businessId,
+          session_data,
+          whatsapp_business_number,
+          whatsappBusinessNumber,
+          phoneNumber,
+        } = req.body;
 
         if (!code) {
           return res.status(400).json({ error: 'Authorization code from Meta is required' });
         }
 
+        const enteredNumber = whatsapp_business_number || whatsappBusinessNumber || phoneNumber;
+
         // Fetch fallback phone number from restaurant profile if available
-        let fallbackPhone: string | undefined;
-        try {
-          const restProfile = await tenantService.resolveRestaurantById(restaurantId);
-          fallbackPhone = restProfile?.phone;
-        } catch {}
+        let fallbackPhone: string | undefined = enteredNumber;
+        if (!fallbackPhone) {
+          try {
+            const restProfile = await tenantService.resolveRestaurantById(restaurantId);
+            fallbackPhone = restProfile?.phone;
+          } catch {}
+        }
 
         const result = await whatsappCoexistenceService.onboardCoexistence(
           restaurantId,
           {
             code,
-            waba_id,
-            phone_number_id,
-            business_id,
+            waba_id: waba_id || wabaId,
+            phone_number_id: phone_number_id || phoneNumberId,
+            business_id: business_id || businessId,
+            whatsapp_business_number: enteredNumber,
             session_data,
           },
           fallbackPhone

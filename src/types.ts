@@ -409,6 +409,7 @@ export interface RestaurantWhatsAppIntegration {
   phoneNumberId?: string;
   businessId?: string;
   displayPhoneNumber?: string;
+  whatsappBusinessNumber?: string;
   verifiedName?: string;
   qualityRating?: string;
   status: 'CONNECTED' | 'DISCONNECTED' | 'NOT_CONNECTED';

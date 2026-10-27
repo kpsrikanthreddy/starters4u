@@ -39,6 +39,29 @@ export function decryptAccessToken(encrypted: string, ivHex: string, authTagHex:
   }
 }
 
+/**
+ * Normalizes Indian mobile number to E.164 format (+919032670077)
+ * Accepts 10-digit number without requiring the user to type +91.
+ */
+export function normalizeIndianPhoneNumber(input: string): string {
+  if (!input) return '';
+  const trimmed = input.trim();
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits.length === 10) {
+    return `+91${digits}`;
+  }
+  if (digits.length === 12 && digits.startsWith('91')) {
+    return `+${digits}`;
+  }
+  if (digits.length === 11 && digits.startsWith('0')) {
+    return `+91${digits.slice(1)}`;
+  }
+  if (trimmed.startsWith('+')) {
+    return `+${digits}`;
+  }
+  return digits ? `+91${digits}` : '';
+}
+
 export interface WhatsAppIntegrationPublicInfo {
   connected: boolean;
   restaurantId: string;
@@ -48,6 +71,7 @@ export interface WhatsAppIntegrationPublicInfo {
   phoneNumberId?: string;
   businessId?: string;
   displayPhoneNumber?: string;
+  whatsappBusinessNumber?: string;
   verifiedName?: string;
   qualityRating?: string;
   status: 'CONNECTED' | 'DISCONNECTED' | 'NOT_CONNECTED';
@@ -60,6 +84,7 @@ export interface CoexistenceOnboardParams {
   waba_id?: string;
   phone_number_id?: string;
   business_id?: string;
+  whatsapp_business_number?: string;
   session_data?: any;
 }
 
@@ -88,6 +113,66 @@ class WhatsAppCoexistenceService {
   }
 
   /**
+   * Save or update the restaurant's existing WhatsApp Business App number.
+   * NOTE: Does NOT mark integration as CONNECTED.
+   * Only stores the normalized number for coexistence onboarding.
+   */
+  public async saveBusinessNumber(restaurantId: string, rawPhone: string): Promise<WhatsAppIntegrationPublicInfo> {
+    if (!restaurantId) throw new Error('Restaurant ID is required');
+    const normalized = normalizeIndianPhoneNumber(rawPhone);
+    if (!normalized || normalized.replace(/\D/g, '').length < 10) {
+      throw new Error('Please enter a valid 10-digit mobile number');
+    }
+
+    try {
+      const sql = `
+        INSERT INTO restaurant_whatsapp_integrations (
+          restaurant_id, provider, connection_mode, whatsapp_business_number,
+          status, updated_at
+        ) VALUES (
+          $1, 'META', 'COEXISTENCE', $2,
+          'DISCONNECTED', NOW()
+        )
+        ON CONFLICT (restaurant_id) DO UPDATE SET
+          whatsapp_business_number = EXCLUDED.whatsapp_business_number,
+          updated_at = NOW()
+        RETURNING *;
+      `;
+      const res = await query(sql, [restaurantId, normalized]);
+      if (res.rows && res.rows.length > 0) {
+        return this.getIntegrationStatus(restaurantId);
+      }
+    } catch (err: any) {
+      if (!isPostgresRunning()) {
+        if (!inMemoryDb.restaurant_whatsapp_integrations) {
+          inMemoryDb.restaurant_whatsapp_integrations = [];
+        }
+        const existing = inMemoryDb.restaurant_whatsapp_integrations.find(
+          (i: any) => i.restaurant_id === restaurantId
+        );
+        if (existing) {
+          existing.whatsapp_business_number = normalized;
+          existing.updated_at = new Date().toISOString();
+        } else {
+          inMemoryDb.restaurant_whatsapp_integrations.push({
+            id: crypto.randomUUID(),
+            restaurant_id: restaurantId,
+            provider: 'META',
+            connection_mode: 'COEXISTENCE',
+            whatsapp_business_number: normalized,
+            status: 'DISCONNECTED',
+            updated_at: new Date().toISOString(),
+          });
+        }
+        return this.getIntegrationStatus(restaurantId);
+      }
+      throw err;
+    }
+
+    return this.getIntegrationStatus(restaurantId);
+  }
+
+  /**
    * Retrieve active WhatsApp Coexistence integration for a specific restaurant
    */
   public async getIntegrationStatus(restaurantId: string): Promise<WhatsAppIntegrationPublicInfo> {
@@ -104,7 +189,7 @@ class WhatsAppCoexistenceService {
     try {
       const res = await query(
         `SELECT id, restaurant_id, provider, connection_mode, waba_id, phone_number_id,
-                business_id, display_phone_number, verified_name, quality_rating,
+                business_id, display_phone_number, whatsapp_business_number, verified_name, quality_rating,
                 status, connected_at, updated_at
          FROM restaurant_whatsapp_integrations
          WHERE restaurant_id = $1
@@ -124,6 +209,7 @@ class WhatsAppCoexistenceService {
           phoneNumberId: row.phone_number_id || undefined,
           businessId: row.business_id || undefined,
           displayPhoneNumber: row.display_phone_number || undefined,
+          whatsappBusinessNumber: row.whatsapp_business_number || undefined,
           verifiedName: row.verified_name || undefined,
           qualityRating: row.quality_rating || undefined,
           status: isConnected ? 'CONNECTED' : 'DISCONNECTED',
@@ -148,6 +234,7 @@ class WhatsAppCoexistenceService {
             phoneNumberId: inMem.phone_number_id,
             businessId: inMem.business_id,
             displayPhoneNumber: inMem.display_phone_number,
+            whatsappBusinessNumber: inMem.whatsapp_business_number,
             verifiedName: inMem.verified_name,
             qualityRating: inMem.quality_rating,
             status: isConnected ? 'CONNECTED' : 'DISCONNECTED',
@@ -277,6 +364,12 @@ class WhatsAppCoexistenceService {
       authTagHex = encryptedObj.authTag;
     }
 
+    const rawBusinessNumber = params.whatsapp_business_number || fallbackPhoneNumber || '';
+    const normalizedBusinessNumber = rawBusinessNumber ? normalizeIndianPhoneNumber(rawBusinessNumber) : '';
+    if (!displayPhoneNumber && normalizedBusinessNumber) {
+      displayPhoneNumber = normalizedBusinessNumber;
+    }
+
     const now = new Date().toISOString();
 
     // Persist into database with ON CONFLICT UPDATE
@@ -284,14 +377,14 @@ class WhatsAppCoexistenceService {
       const sql = `
         INSERT INTO restaurant_whatsapp_integrations (
           restaurant_id, provider, connection_mode, waba_id, phone_number_id,
-          business_id, display_phone_number, verified_name, quality_rating,
+          business_id, display_phone_number, whatsapp_business_number, verified_name, quality_rating,
           status, encrypted_access_token, token_iv, token_auth_tag,
           raw_setup_data, connected_at, updated_at
         ) VALUES (
           $1, 'META', 'COEXISTENCE', $2, $3,
-          $4, $5, $6, $7,
-          'CONNECTED', $8, $9, $10,
-          $11, NOW(), NOW()
+          $4, $5, $6, $7, $8,
+          'CONNECTED', $9, $10, $11,
+          $12, NOW(), NOW()
         )
         ON CONFLICT (restaurant_id) DO UPDATE SET
           provider = 'META',
@@ -300,6 +393,7 @@ class WhatsAppCoexistenceService {
           phone_number_id = COALESCE(NULLIF(EXCLUDED.phone_number_id, ''), restaurant_whatsapp_integrations.phone_number_id),
           business_id = COALESCE(NULLIF(EXCLUDED.business_id, ''), restaurant_whatsapp_integrations.business_id),
           display_phone_number = COALESCE(NULLIF(EXCLUDED.display_phone_number, ''), restaurant_whatsapp_integrations.display_phone_number),
+          whatsapp_business_number = COALESCE(NULLIF(EXCLUDED.whatsapp_business_number, ''), restaurant_whatsapp_integrations.whatsapp_business_number),
           verified_name = COALESCE(NULLIF(EXCLUDED.verified_name, ''), restaurant_whatsapp_integrations.verified_name),
           quality_rating = COALESCE(NULLIF(EXCLUDED.quality_rating, ''), restaurant_whatsapp_integrations.quality_rating),
           status = 'CONNECTED',
@@ -318,6 +412,7 @@ class WhatsAppCoexistenceService {
         resolvedPhoneNumberId || null,
         resolvedBusinessId || null,
         displayPhoneNumber || null,
+        normalizedBusinessNumber || null,
         verifiedName || null,
         qualityRating || null,
         encryptedToken,
@@ -337,6 +432,7 @@ class WhatsAppCoexistenceService {
           phoneNumberId: row.phone_number_id || undefined,
           businessId: row.business_id || undefined,
           displayPhoneNumber: row.display_phone_number || undefined,
+          whatsappBusinessNumber: row.whatsapp_business_number || normalizedBusinessNumber || undefined,
           verifiedName: row.verified_name || undefined,
           qualityRating: row.quality_rating || undefined,
           status: 'CONNECTED',
@@ -361,6 +457,7 @@ class WhatsAppCoexistenceService {
         phone_number_id: resolvedPhoneNumberId,
         business_id: resolvedBusinessId,
         display_phone_number: displayPhoneNumber,
+        whatsapp_business_number: normalizedBusinessNumber,
         verified_name: verifiedName,
         quality_rating: qualityRating,
         status: 'CONNECTED',
@@ -379,23 +476,23 @@ class WhatsAppCoexistenceService {
       } else {
         inMemoryDb.restaurant_whatsapp_integrations.push(record);
       }
+      return {
+        connected: true,
+        restaurantId,
+        provider: 'META',
+        connectionMode: 'COEXISTENCE',
+        wabaId: resolvedWabaId || undefined,
+        phoneNumberId: resolvedPhoneNumberId || undefined,
+        businessId: resolvedBusinessId || undefined,
+        displayPhoneNumber: displayPhoneNumber || undefined,
+        whatsappBusinessNumber: normalizedBusinessNumber || undefined,
+        verifiedName: verifiedName || undefined,
+        qualityRating: qualityRating || undefined,
+        status: 'CONNECTED',
+        connectedAt: now,
+        updatedAt: now,
+      };
     }
-
-    return {
-      connected: true,
-      restaurantId,
-      provider: 'META',
-      connectionMode: 'COEXISTENCE',
-      wabaId: resolvedWabaId || undefined,
-      phoneNumberId: resolvedPhoneNumberId || undefined,
-      businessId: resolvedBusinessId || undefined,
-      displayPhoneNumber: displayPhoneNumber || undefined,
-      verifiedName: verifiedName || undefined,
-      qualityRating: qualityRating || undefined,
-      status: 'CONNECTED',
-      connectedAt: now,
-      updatedAt: now,
-    };
   }
 
   /**

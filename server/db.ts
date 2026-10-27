@@ -895,6 +895,7 @@ export async function initializeDatabase(): Promise<{ success: boolean; mode: st
           'migrations/010_starters4u_order_feedback.sql',
           'migrations/011_feedback_workflow_and_owner_alerts.sql',
           'migrations/012_restaurant_whatsapp_coexistence.sql',
+          'migrations/013_whatsapp_business_number.sql',
         ];
 
         for (const relMig of migrationFiles) {
