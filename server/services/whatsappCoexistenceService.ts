@@ -98,7 +98,7 @@ class WhatsAppCoexistenceService {
       process.env.WHATSAPP_APP_ID ||
       process.env.VITE_META_APP_ID ||
       process.env.FACEBOOK_APP_ID ||
-      '';
+      '1928586071146037';
 
     // Fixed Starters4U Facebook Login for Business Configuration ID
     const configId = '1869728914394014';
@@ -291,7 +291,8 @@ class WhatsAppCoexistenceService {
       }
     }
 
-    const appId = process.env.META_APP_ID || process.env.WHATSAPP_APP_ID || process.env.VITE_META_APP_ID;
+    const appId =
+      process.env.META_APP_ID || process.env.WHATSAPP_APP_ID || process.env.VITE_META_APP_ID || '1928586071146037';
     const appSecret = process.env.META_APP_SECRET || process.env.WHATSAPP_APP_SECRET;
 
     // Server-side code exchange with Meta Graph API when credentials exist

@@ -329,7 +329,7 @@ export const SettingsSection: React.FC = () => {
         return;
       }
 
-      const metaAppId = appId || '1869728914394014';
+      const metaAppId = appId || '1928586071146037';
 
       const doInit = () => {
         try {
@@ -551,7 +551,7 @@ export const SettingsSection: React.FC = () => {
     });
 
     const configId = whatsAppConfig?.configId || '1869728914394014';
-    const metaAppId = whatsAppConfig?.appId || '1869728914394014';
+    const metaAppId = whatsAppConfig?.appId || '1928586071146037';
 
     // Reset session capture
     capturedSessionRef.current = {};
