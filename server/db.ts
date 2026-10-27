@@ -127,6 +127,7 @@ export interface InMemoryDbState {
   inventory_items?: any[];
   inventory_transactions?: any[];
   customer_feedback_requests?: any[];
+  restaurant_whatsapp_integrations?: any[];
 }
 
 export const inMemoryDb: InMemoryDbState = {
@@ -639,6 +640,7 @@ export const inMemoryDb: InMemoryDbState = {
   payment_settings_audit: [] as any[],
   payment_attempts: [] as any[],
   customer_feedback_requests: [] as any[],
+  restaurant_whatsapp_integrations: [] as any[],
   platform_pricing_config: [
     {
       id: 'default',
@@ -892,6 +894,7 @@ export async function initializeDatabase(): Promise<{ success: boolean; mode: st
           'migrations/009_order_confirmed_and_feedback.sql',
           'migrations/010_starters4u_order_feedback.sql',
           'migrations/011_feedback_workflow_and_owner_alerts.sql',
+          'migrations/012_restaurant_whatsapp_coexistence.sql',
         ];
 
         for (const relMig of migrationFiles) {

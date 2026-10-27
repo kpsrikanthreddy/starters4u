@@ -400,3 +400,27 @@ export interface DailyStockSummaryReport {
   items: InventoryItemRecord[];
 }
 
+export interface RestaurantWhatsAppIntegration {
+  connected: boolean;
+  restaurantId?: string;
+  provider?: string;
+  connectionMode: 'COEXISTENCE';
+  wabaId?: string;
+  phoneNumberId?: string;
+  businessId?: string;
+  displayPhoneNumber?: string;
+  verifiedName?: string;
+  qualityRating?: string;
+  status: 'CONNECTED' | 'DISCONNECTED' | 'NOT_CONNECTED';
+  connectedAt?: string;
+  updatedAt?: string;
+}
+
+declare global {
+  interface Window {
+    FB?: any;
+    fbAsyncInit?: () => void;
+  }
+}
+
+

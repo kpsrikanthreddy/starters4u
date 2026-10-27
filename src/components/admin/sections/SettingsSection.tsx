@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAdminAuth } from '../../../context/AdminAuthContext';
 import { soundService } from '../../../utils/audio';
+import { RestaurantWhatsAppIntegration } from '../../../types';
 import {
   Building2,
   CreditCard,
@@ -24,11 +25,15 @@ import {
   History,
   Lock,
   Info,
+  MessageSquare,
+  Smartphone,
+  Loader2,
+  Unlink,
 } from 'lucide-react';
 
 export const SettingsSection: React.FC = () => {
   const { user, restaurant, adminFetch, refreshProfile } = useAdminAuth();
-  const [activeTab, setActiveTab] = useState<'profile' | 'payments' | 'subscription' | 'seo'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'payments' | 'subscription' | 'seo' | 'whatsapp'>('profile');
 
   // Restaurant Profile
   const [profile, setProfile] = useState<any>({
@@ -65,6 +70,23 @@ export const SettingsSection: React.FC = () => {
   // Subscription
   const [subscription, setSubscription] = useState<any>(null);
 
+  // WhatsApp Coexistence Integration State
+  const [whatsAppIntegration, setWhatsAppIntegration] = useState<RestaurantWhatsAppIntegration | null>(null);
+  const [whatsAppConfig, setWhatsAppConfig] = useState<{ appId: string; configId: string } | null>(null);
+  const [isConnectingWhatsApp, setIsConnectingWhatsApp] = useState(false);
+  const [isDisconnectingWhatsApp, setIsDisconnectingWhatsApp] = useState(false);
+  const [whatsAppError, setWhatsAppError] = useState<string | null>(null);
+  const [whatsAppSuccess, setWhatsAppSuccess] = useState<string | null>(null);
+  const [showDisconnectModal, setShowDisconnectModal] = useState(false);
+
+  // Captured Meta Embedded Signup session data (populated via postMessage from Facebook/Meta)
+  const capturedSessionRef = useRef<{
+    wabaId?: string;
+    phoneNumberId?: string;
+    businessId?: string;
+    status?: string;
+  }>({});
+
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -93,13 +115,54 @@ export const SettingsSection: React.FC = () => {
     }
   };
 
+  // Listen for Meta Embedded Signup session information using window message events
+  useEffect(() => {
+    const handleMetaMessage = (event: MessageEvent) => {
+      // Validate event origin is from Facebook/Meta before processing it
+      if (event.origin !== 'https://www.facebook.com' && event.origin !== 'https://web.facebook.com') {
+        return;
+      }
+
+      try {
+        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        if (!data) return;
+
+        // Meta Embedded Signup emits events like WA_EMBEDDED_SIGNUP or session payloads
+        if (data.type === 'WA_EMBEDDED_SIGNUP' || data.event === 'FINISH' || data.phone_number_id || data.waba_id) {
+          const payload = data.data || data;
+          const wabaId = payload.waba_id || payload.wabaId;
+          const phoneNumberId = payload.phone_number_id || payload.phoneNumberId;
+          const businessId = payload.business_id || payload.businessId;
+          const status = payload.status || payload.current_step || data.event;
+
+          capturedSessionRef.current = {
+            ...capturedSessionRef.current,
+            ...(wabaId ? { wabaId: String(wabaId) } : {}),
+            ...(phoneNumberId ? { phoneNumberId: String(phoneNumberId) } : {}),
+            ...(businessId ? { businessId: String(businessId) } : {}),
+            ...(status ? { status: String(status) } : {}),
+          };
+        }
+      } catch {
+        // Non-JSON message from external frame, safely ignore
+      }
+    };
+
+    window.addEventListener('message', handleMetaMessage);
+    return () => {
+      window.removeEventListener('message', handleMetaMessage);
+    };
+  }, []);
+
   useEffect(() => {
     const loadAll = async () => {
       try {
-        const [profRes, payRes, subRes] = await Promise.all([
+        const [profRes, payRes, subRes, waStatusRes, waCfgRes] = await Promise.all([
           adminFetch('/api/admin/settings'),
           adminFetch('/api/admin/payment-settings'),
           adminFetch('/api/admin/subscription'),
+          adminFetch('/api/admin/whatsapp/status'),
+          adminFetch('/api/admin/whatsapp/config'),
         ]);
 
         if (profRes.ok) {
@@ -124,6 +187,16 @@ export const SettingsSection: React.FC = () => {
           const d = await subRes.json();
           if (d) setSubscription(d);
         }
+
+        if (waStatusRes.ok) {
+          const d = await waStatusRes.json();
+          if (d) setWhatsAppIntegration(d);
+        }
+
+        if (waCfgRes.ok) {
+          const d = await waCfgRes.json();
+          if (d) setWhatsAppConfig(d);
+        }
       } catch (err) {
         console.error('Failed to load settings:', err);
       } finally {
@@ -133,6 +206,174 @@ export const SettingsSection: React.FC = () => {
 
     loadAll();
   }, [adminFetch]);
+
+  // Load Meta Facebook JavaScript SDK dynamically
+  const loadMetaSdk = (appId: string): Promise<void> => {
+    return new Promise((resolve) => {
+      if (typeof window !== 'undefined' && window.FB) {
+        resolve();
+        return;
+      }
+      if (typeof window !== 'undefined') {
+        window.fbAsyncInit = function () {
+          if (window.FB) {
+            window.FB.init({
+              appId: appId || '1869728914394014',
+              cookie: true,
+              xfbml: true,
+              version: 'v21.0',
+            });
+          }
+          resolve();
+        };
+
+        if (!document.getElementById('facebook-jssdk')) {
+          const js = document.createElement('script');
+          js.id = 'facebook-jssdk';
+          js.src = 'https://connect.facebook.net/en_US/sdk.js';
+          js.async = true;
+          js.defer = true;
+          js.onload = () => {
+            if (window.FB) {
+              window.FB.init({
+                appId: appId || '1869728914394014',
+                cookie: true,
+                xfbml: true,
+                version: 'v21.0',
+              });
+              resolve();
+            }
+          };
+          js.onerror = () => {
+            resolve();
+          };
+          document.body.appendChild(js);
+        } else {
+          resolve();
+        }
+      } else {
+        resolve();
+      }
+    });
+  };
+
+  // Launch Meta Embedded Signup for WhatsApp Business App Coexistence
+  const handleConnectWhatsApp = async () => {
+    setWhatsAppError(null);
+    setWhatsAppSuccess(null);
+    setIsConnectingWhatsApp(true);
+
+    try {
+      let config = whatsAppConfig;
+      if (!config || !config.configId) {
+        const cfgRes = await adminFetch('/api/admin/whatsapp/config');
+        if (cfgRes.ok) {
+          config = await cfgRes.json();
+          setWhatsAppConfig(config);
+        }
+      }
+
+      const appId = config?.appId || '';
+      // Starters4U Facebook Login for Business Configuration ID
+      const configId = config?.configId || '1869728914394014';
+
+      await loadMetaSdk(appId);
+
+      if (!window.FB) {
+        throw new Error(
+          'Meta Facebook SDK could not be initialized. Please check network connectivity or disable adblockers.'
+        );
+      }
+
+      // Reset session capture
+      capturedSessionRef.current = {};
+
+      // Launch FB.login with WhatsApp Business App coexistence onboarding
+      window.FB.login(
+        async (response: any) => {
+          if (response && response.authResponse && response.authResponse.code) {
+            const code = response.authResponse.code;
+            try {
+              const onboardRes = await adminFetch('/api/admin/whatsapp/onboard-coexistence', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  code,
+                  wabaId: capturedSessionRef.current.wabaId,
+                  phoneNumberId: capturedSessionRef.current.phoneNumberId,
+                  businessId: capturedSessionRef.current.businessId,
+                }),
+              });
+
+              const result = await onboardRes.json();
+              if (onboardRes.ok && result.success) {
+                setWhatsAppIntegration(result.integration);
+                setWhatsAppSuccess(
+                  'WhatsApp Business App successfully connected in Coexistence mode!'
+                );
+                soundService.playChime('notification');
+              } else {
+                setWhatsAppError(result.error || 'Failed to complete WhatsApp onboarding');
+              }
+            } catch (postErr: any) {
+              setWhatsAppError(postErr.message || 'Error communicating with Starters4U server');
+            } finally {
+              setIsConnectingWhatsApp(false);
+            }
+          } else {
+            setIsConnectingWhatsApp(false);
+            if (response?.status === 'unknown') {
+              setWhatsAppError('WhatsApp connection window was closed or cancelled.');
+            } else {
+              setWhatsAppError(
+                response?.error_message ||
+                  'Could not obtain authorization code from Meta. Please retry.'
+              );
+            }
+          }
+        },
+        {
+          config_id: configId,
+          response_type: 'code',
+          override_default_response_type: true,
+          extras: {
+            setup: {},
+            sessionInfoVersion: '3',
+            featureType: 'whatsapp_business_app_onboarding',
+          },
+        }
+      );
+    } catch (err: any) {
+      setIsConnectingWhatsApp(false);
+      setWhatsAppError(err.message || 'Failed to launch Meta Embedded Signup');
+    }
+  };
+
+  // Disconnect handler with confirmation
+  const handleConfirmDisconnect = async () => {
+    setIsDisconnectingWhatsApp(true);
+    setWhatsAppError(null);
+    try {
+      const res = await adminFetch('/api/admin/whatsapp/disconnect', {
+        method: 'POST',
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setWhatsAppIntegration(data.integration);
+        setShowDisconnectModal(false);
+        setWhatsAppSuccess('WhatsApp Business App disconnected successfully.');
+        soundService.playChime('notification');
+      } else {
+        setWhatsAppError(data.error || 'Failed to disconnect WhatsApp integration');
+      }
+    } catch (err: any) {
+      setWhatsAppError(err.message || 'Network error while disconnecting');
+    } finally {
+      setIsDisconnectingWhatsApp(false);
+    }
+  };
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -238,6 +479,15 @@ export const SettingsSection: React.FC = () => {
           >
             <Globe className="w-3.5 h-3.5" />
             <span>SEO & Links</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('whatsapp')}
+            className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
+              activeTab === 'whatsapp' ? 'bg-white text-emerald-600 shadow-xs' : 'text-slate-600'
+            }`}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>WhatsApp Integration</span>
           </button>
         </div>
       </div>
@@ -931,6 +1181,232 @@ export const SettingsSection: React.FC = () => {
                   https://www.starters4u.in/r/{profile.slug || restaurant?.slug || ''}/menu
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* WhatsApp Integration Tab */}
+      {activeTab === 'whatsapp' && (
+        <div className="space-y-6">
+          {whatsAppSuccess && (
+            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center justify-between shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                <span className="font-semibold">{whatsAppSuccess}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setWhatsAppSuccess(null)}
+                className="text-emerald-700 hover:text-emerald-900 font-bold ml-3"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {whatsAppError && (
+            <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center justify-between shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                <span className="font-semibold">{whatsAppError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setWhatsAppError(null)}
+                className="text-rose-700 hover:text-rose-900 font-bold ml-3"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-6">
+            {/* Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-100">
+              <div className="flex items-start gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 shrink-0 shadow-xs">
+                  <MessageSquare className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">WhatsApp Business</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Connect your restaurant's existing WhatsApp Business App number to Starters4U.
+                  </p>
+                </div>
+              </div>
+
+              {/* Status pill */}
+              <div className="flex items-center gap-2">
+                {whatsAppIntegration?.status === 'CONNECTED' ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    Connected
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                    <span className="w-2 h-2 rounded-full bg-slate-400" />
+                    Not Connected
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Content: Connected vs Not Connected */}
+            {whatsAppIntegration?.status === 'CONNECTED' ? (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Status</div>
+                    <div className="font-bold text-emerald-600 text-sm mt-1 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4" />
+                      Connected
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-1">Verified with Meta Platform</div>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Mode</div>
+                    <div className="font-bold text-slate-900 text-sm mt-1 flex items-center gap-1.5">
+                      <Smartphone className="w-4 h-4 text-emerald-600" />
+                      Coexistence
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-1">App + API active simultaneously</div>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Phone</div>
+                    <div className="font-mono font-bold text-slate-900 text-sm mt-1">
+                      {whatsAppIntegration.displayPhoneNumber || profile?.phone || 'Connected'}
+                    </div>
+                    {whatsAppIntegration.verifiedName && (
+                      <div className="text-[11px] text-slate-500 mt-1 truncate">
+                        {whatsAppIntegration.verifiedName}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-emerald-50/50 border border-emerald-100 text-slate-700 space-y-2">
+                  <h4 className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                    Coexistence Active
+                  </h4>
+                  <p className="text-xs text-slate-600">
+                    Your staff can continue answering chats on the WhatsApp Business mobile app as normal. Starters4U handles automated receipts, table ordering notifications, and customer feedback alongside your daily mobile usage.
+                  </p>
+                </div>
+
+                <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="text-xs text-slate-500">
+                    Need to disconnect or reconfigure this WhatsApp integration?
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowDisconnectModal(true)}
+                    className="px-4 py-2.5 rounded-xl text-xs font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 transition flex items-center justify-center gap-1.5 shadow-2xs"
+                  >
+                    <Unlink className="w-3.5 h-3.5" />
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="p-5 rounded-2xl bg-emerald-50/40 border border-emerald-100 space-y-3">
+                  <h4 className="text-xs font-bold text-emerald-950 uppercase tracking-wider flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                    WhatsApp Business App Coexistence
+                  </h4>
+                  <ul className="text-xs space-y-2 text-slate-700 list-disc list-inside">
+                    <li>
+                      <span className="font-semibold text-slate-900">Restaurant keeps using its existing WhatsApp Business mobile app.</span>
+                    </li>
+                    <li>
+                      <span className="font-semibold text-slate-900">Starters4U can also use WhatsApp Business Platform APIs.</span>
+                    </li>
+                    <li>
+                      <span className="font-semibold text-slate-900">Do NOT migrate/disconnect/delete the restaurant's existing WhatsApp Business App account.</span>
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="space-y-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleConnectWhatsApp}
+                    disabled={isConnectingWhatsApp}
+                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-bold text-xs shadow-sm hover:shadow transition flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {isConnectingWhatsApp ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Connecting with Meta...
+                      </>
+                    ) : (
+                      <>
+                        <MessageSquare className="w-4 h-4" />
+                        Connect WhatsApp Business
+                      </>
+                    )}
+                  </button>
+                  <p className="text-[11px] text-slate-500">
+                    Opens Meta's secure Embedded Signup modal. Uses Starters4U's official Meta Login Configuration.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Disconnect Confirmation Modal */}
+      {showDisconnectModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-black text-slate-900 text-sm">Disconnect WhatsApp Business?</h3>
+                <p className="text-xs text-slate-500">Requires restaurant admin confirmation</p>
+              </div>
+            </div>
+
+            <div className="text-xs text-slate-600 space-y-2">
+              <p>
+                This action will pause Starters4U's integration with your WhatsApp Business number.
+              </p>
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-slate-700 font-medium">
+                Your mobile WhatsApp Business App and chat history will remain completely untouched and active on your phone.
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowDisconnectModal(false)}
+                disabled={isDisconnectingWhatsApp}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDisconnect}
+                disabled={isDisconnectingWhatsApp}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white transition flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isDisconnectingWhatsApp ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Disconnecting...
+                  </>
+                ) : (
+                  'Confirm Disconnect'
+                )}
+              </button>
             </div>
           </div>
         </div>

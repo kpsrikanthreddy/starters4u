@@ -41,6 +41,7 @@ import {
   handleWhatsAppVerification,
   handleWhatsAppWebhookEvent,
 } from './services/whatsappWebhookService.js';
+import { whatsappCoexistenceService } from './services/whatsappCoexistenceService.js';
 
 dotenv.config();
 
@@ -1295,6 +1296,94 @@ export function createApp(): express.Application {
     }
   });
 
+  // ==========================================================
+  // RESTAURANT WHATSAPP BUSINESS APP COEXISTENCE INTEGRATION
+  // Mode: COEXISTENCE (Preserves merchant's WhatsApp Business App)
+  // Multi-Tenant Aware: Configured per restaurant_id
+  // ==========================================================
+  app.get('/api/admin/whatsapp/config', requireAuth, requireRestaurantTenant, (_req, res) => {
+    try {
+      const config = whatsappCoexistenceService.getPublicConfig();
+      res.json(config);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to fetch WhatsApp configuration', details: err.message });
+    }
+  });
+
+  app.get('/api/admin/whatsapp/status', requireAuth, requireRestaurantTenant, async (req, res) => {
+    try {
+      const restaurantId = req.tenant.restaurantId;
+      const statusInfo = await whatsappCoexistenceService.getIntegrationStatus(restaurantId);
+      res.json(statusInfo);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to fetch WhatsApp integration status', details: err.message });
+    }
+  });
+
+  app.post(
+    '/api/admin/whatsapp/onboard-coexistence',
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const { code, waba_id, phone_number_id, business_id, session_data } = req.body;
+
+        if (!code) {
+          return res.status(400).json({ error: 'Authorization code from Meta is required' });
+        }
+
+        // Fetch fallback phone number from restaurant profile if available
+        let fallbackPhone: string | undefined;
+        try {
+          const restProfile = await tenantService.resolveRestaurantById(restaurantId);
+          fallbackPhone = restProfile?.phone;
+        } catch {}
+
+        const result = await whatsappCoexistenceService.onboardCoexistence(
+          restaurantId,
+          {
+            code,
+            waba_id,
+            phone_number_id,
+            business_id,
+            session_data,
+          },
+          fallbackPhone
+        );
+
+        res.json({
+          success: true,
+          message: 'WhatsApp Business App Coexistence connected successfully!',
+          integration: result,
+        });
+      } catch (err: any) {
+        console.error('[Admin WhatsApp Onboard Error]:', err);
+        res.status(500).json({ error: 'Failed to complete WhatsApp onboarding', details: err.message });
+      }
+    }
+  );
+
+  app.post(
+    '/api/admin/whatsapp/disconnect',
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        await whatsappCoexistenceService.disconnect(restaurantId);
+        res.json({
+          success: true,
+          message: 'WhatsApp Business disconnected from Starters4U. Your mobile app remains active.',
+        });
+      } catch (err: any) {
+        res.status(500).json({ error: 'Failed to disconnect WhatsApp integration', details: err.message });
+      }
+    }
+  );
+
   app.get('/api/admin/analytics', requireAuth, requireRestaurantTenant, async (req, res) => {
     try {
       const restaurantId = req.tenant.restaurantId;
@@ -1792,6 +1881,16 @@ export function createApp(): express.Application {
         isPopular: false,
       },
     ]);
+  });
+
+  // Platform Admin WhatsApp Integration View across all restaurants
+  app.get('/api/platform/whatsapp/integrations', requireAuth, requirePlatformAdmin, async (_req, res) => {
+    try {
+      const integrations = await whatsappCoexistenceService.getAllRestaurantIntegrations();
+      res.json({ success: true, integrations });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to fetch WhatsApp integrations', details: err.message });
+    }
   });
 
   // Platform System & Infrastructure Health

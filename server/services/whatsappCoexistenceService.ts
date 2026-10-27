@@ -1,0 +1,470 @@
+import crypto from 'crypto';
+import { query, inMemoryDb, isPostgresRunning } from '../db.js';
+import { JWT_SECRET } from '../config.js';
+
+// Derive 256-bit encryption key from server secret
+const ENCRYPTION_KEY = crypto.createHash('sha256').update(JWT_SECRET).digest();
+
+/**
+ * Encrypt sensitive token using AES-256-GCM
+ */
+export function encryptAccessToken(token: string): { encrypted: string; iv: string; authTag: string } {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+  let encrypted = cipher.update(token, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  const authTag = cipher.getAuthTag().toString('hex');
+  return {
+    encrypted,
+    iv: iv.toString('hex'),
+    authTag,
+  };
+}
+
+/**
+ * Decrypt sensitive token using AES-256-GCM (server-side only)
+ */
+export function decryptAccessToken(encrypted: string, ivHex: string, authTagHex: string): string | null {
+  try {
+    const iv = Buffer.from(ivHex, 'hex');
+    const authTag = Buffer.from(authTagHex, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+    decipher.setAuthTag(authTag);
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (err) {
+    console.error('[WhatsAppCoexistence] Failed to decrypt access token:', err);
+    return null;
+  }
+}
+
+export interface WhatsAppIntegrationPublicInfo {
+  connected: boolean;
+  restaurantId: string;
+  provider: string;
+  connectionMode: 'COEXISTENCE';
+  wabaId?: string;
+  phoneNumberId?: string;
+  businessId?: string;
+  displayPhoneNumber?: string;
+  verifiedName?: string;
+  qualityRating?: string;
+  status: 'CONNECTED' | 'DISCONNECTED' | 'NOT_CONNECTED';
+  connectedAt?: string;
+  updatedAt?: string;
+}
+
+export interface CoexistenceOnboardParams {
+  code: string;
+  waba_id?: string;
+  phone_number_id?: string;
+  business_id?: string;
+  session_data?: any;
+}
+
+class WhatsAppCoexistenceService {
+  /**
+   * Get public Meta App and Configuration parameters for Embedded Signup
+   */
+  public getPublicConfig() {
+    const appId =
+      process.env.META_APP_ID ||
+      process.env.WHATSAPP_APP_ID ||
+      process.env.VITE_META_APP_ID ||
+      process.env.FACEBOOK_APP_ID ||
+      '';
+
+    // Fixed Starters4U Facebook Login for Business Configuration ID
+    const configId = '1869728914394014';
+
+    return {
+      appId,
+      configId,
+      featureType: 'whatsapp_business_app_onboarding',
+      sessionInfoVersion: '3',
+      connectionMode: 'COEXISTENCE',
+    };
+  }
+
+  /**
+   * Retrieve active WhatsApp Coexistence integration for a specific restaurant
+   */
+  public async getIntegrationStatus(restaurantId: string): Promise<WhatsAppIntegrationPublicInfo> {
+    if (!restaurantId) {
+      return {
+        connected: false,
+        restaurantId: '',
+        provider: 'META',
+        connectionMode: 'COEXISTENCE',
+        status: 'NOT_CONNECTED',
+      };
+    }
+
+    try {
+      const res = await query(
+        `SELECT id, restaurant_id, provider, connection_mode, waba_id, phone_number_id,
+                business_id, display_phone_number, verified_name, quality_rating,
+                status, connected_at, updated_at
+         FROM restaurant_whatsapp_integrations
+         WHERE restaurant_id = $1
+         LIMIT 1`,
+        [restaurantId]
+      );
+
+      if (res.rows && res.rows.length > 0) {
+        const row = res.rows[0];
+        const isConnected = row.status === 'CONNECTED';
+        return {
+          connected: isConnected,
+          restaurantId: row.restaurant_id,
+          provider: row.provider || 'META',
+          connectionMode: 'COEXISTENCE',
+          wabaId: row.waba_id || undefined,
+          phoneNumberId: row.phone_number_id || undefined,
+          businessId: row.business_id || undefined,
+          displayPhoneNumber: row.display_phone_number || undefined,
+          verifiedName: row.verified_name || undefined,
+          qualityRating: row.quality_rating || undefined,
+          status: isConnected ? 'CONNECTED' : 'DISCONNECTED',
+          connectedAt: row.connected_at ? new Date(row.connected_at).toISOString() : undefined,
+          updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
+        };
+      }
+    } catch (err: any) {
+      // In-memory fallback if table is not yet created or local testing
+      if (!isPostgresRunning()) {
+        const inMem = (inMemoryDb.restaurant_whatsapp_integrations || []).find(
+          (i: any) => i.restaurant_id === restaurantId
+        );
+        if (inMem) {
+          const isConnected = inMem.status === 'CONNECTED';
+          return {
+            connected: isConnected,
+            restaurantId: inMem.restaurant_id,
+            provider: inMem.provider || 'META',
+            connectionMode: 'COEXISTENCE',
+            wabaId: inMem.waba_id,
+            phoneNumberId: inMem.phone_number_id,
+            businessId: inMem.business_id,
+            displayPhoneNumber: inMem.display_phone_number,
+            verifiedName: inMem.verified_name,
+            qualityRating: inMem.quality_rating,
+            status: isConnected ? 'CONNECTED' : 'DISCONNECTED',
+            connectedAt: inMem.connected_at,
+            updatedAt: inMem.updated_at,
+          };
+        }
+      }
+      console.warn('[WhatsAppCoexistence] Error fetching integration status:', err.message);
+    }
+
+    return {
+      connected: false,
+      restaurantId,
+      provider: 'META',
+      connectionMode: 'COEXISTENCE',
+      status: 'NOT_CONNECTED',
+    };
+  }
+
+  /**
+   * Process and finalize WhatsApp Business App Coexistence Onboarding
+   * Exchanges authorization code server-side and stores encrypted credentials
+   */
+  public async onboardCoexistence(
+    restaurantId: string,
+    params: CoexistenceOnboardParams,
+    fallbackPhoneNumber?: string
+  ): Promise<WhatsAppIntegrationPublicInfo> {
+    if (!restaurantId) {
+      throw new Error('Restaurant ID is required for WhatsApp coexistence onboarding');
+    }
+    if (!params.code) {
+      throw new Error('Authorization code from Meta is required');
+    }
+
+    const { code, waba_id, phone_number_id, business_id, session_data } = params;
+
+    let accessToken: string | null = null;
+    let displayPhoneNumber = fallbackPhoneNumber || '';
+    let verifiedName = '';
+    let qualityRating = 'UNKNOWN';
+    let resolvedWabaId = waba_id || '';
+    let resolvedPhoneNumberId = phone_number_id || '';
+    let resolvedBusinessId = business_id || '';
+
+    // Inspect session_data for extracted fields if top-level parameters were omitted
+    if (session_data && typeof session_data === 'object') {
+      resolvedWabaId = resolvedWabaId || session_data.waba_id || session_data.wabaId || '';
+      resolvedPhoneNumberId = resolvedPhoneNumberId || session_data.phone_number_id || session_data.phoneNumberId || '';
+      resolvedBusinessId = resolvedBusinessId || session_data.business_id || session_data.businessId || '';
+      if (session_data.display_phone_number || session_data.displayPhoneNumber) {
+        displayPhoneNumber = session_data.display_phone_number || session_data.displayPhoneNumber;
+      }
+    }
+
+    const appId = process.env.META_APP_ID || process.env.WHATSAPP_APP_ID || process.env.VITE_META_APP_ID;
+    const appSecret = process.env.META_APP_SECRET || process.env.WHATSAPP_APP_SECRET;
+
+    // Server-side code exchange with Meta Graph API when credentials exist
+    if (appId && appSecret && code) {
+      try {
+        console.info(`[WhatsAppCoexistence] Exchanging authorization code with Meta for restaurant ${restaurantId}...`);
+        const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token?client_id=${encodeURIComponent(
+          appId
+        )}&client_secret=${encodeURIComponent(appSecret)}&code=${encodeURIComponent(code)}`;
+
+        const tokenRes = await fetch(tokenUrl);
+        const tokenData = await tokenRes.json().catch(() => ({}));
+
+        if (tokenRes.ok && tokenData.access_token) {
+          accessToken = tokenData.access_token;
+          console.info(`[WhatsAppCoexistence] Successfully exchanged token with Meta for restaurant ${restaurantId}`);
+
+          // Query Meta Graph API for Phone Number metadata if phone_number_id is available
+          if (resolvedPhoneNumberId) {
+            try {
+              const phoneUrl = `https://graph.facebook.com/v19.0/${encodeURIComponent(
+                resolvedPhoneNumberId
+              )}?fields=display_phone_number,verified_name,quality_rating&access_token=${encodeURIComponent(accessToken)}`;
+              const phoneRes = await fetch(phoneUrl);
+              const phoneData = await phoneRes.json().catch(() => ({}));
+              if (phoneRes.ok && phoneData) {
+                if (phoneData.display_phone_number) displayPhoneNumber = phoneData.display_phone_number;
+                if (phoneData.verified_name) verifiedName = phoneData.verified_name;
+                if (phoneData.quality_rating) qualityRating = phoneData.quality_rating;
+              }
+            } catch (err: any) {
+              console.warn('[WhatsAppCoexistence] Warning: Could not fetch phone details from Meta:', err.message);
+            }
+          } else if (resolvedWabaId) {
+            // If phone_number_id was not provided in session, query WABA for owned phone numbers
+            try {
+              const wabaPhonesUrl = `https://graph.facebook.com/v19.0/${encodeURIComponent(
+                resolvedWabaId
+              )}/phone_numbers?access_token=${encodeURIComponent(accessToken)}`;
+              const wabaPhonesRes = await fetch(wabaPhonesUrl);
+              const wabaPhonesData = await wabaPhonesRes.json().catch(() => ({}));
+              if (wabaPhonesRes.ok && Array.isArray(wabaPhonesData.data) && wabaPhonesData.data.length > 0) {
+                const firstPhone = wabaPhonesData.data[0];
+                resolvedPhoneNumberId = firstPhone.id || resolvedPhoneNumberId;
+                if (firstPhone.display_phone_number) displayPhoneNumber = firstPhone.display_phone_number;
+                if (firstPhone.verified_name) verifiedName = firstPhone.verified_name;
+                if (firstPhone.quality_rating) qualityRating = firstPhone.quality_rating;
+              }
+            } catch (err: any) {
+              console.warn('[WhatsAppCoexistence] Warning: Could not query WABA phone numbers:', err.message);
+            }
+          }
+        } else {
+          console.warn('[WhatsAppCoexistence] Meta token exchange responded with:', tokenData);
+        }
+      } catch (err: any) {
+        console.error('[WhatsAppCoexistence] Error during Meta code exchange:', err.message);
+      }
+    }
+
+    // Encrypt token if available
+    let encryptedToken: string | null = null;
+    let ivHex: string | null = null;
+    let authTagHex: string | null = null;
+
+    if (accessToken) {
+      const encryptedObj = encryptAccessToken(accessToken);
+      encryptedToken = encryptedObj.encrypted;
+      ivHex = encryptedObj.iv;
+      authTagHex = encryptedObj.authTag;
+    }
+
+    const now = new Date().toISOString();
+
+    // Persist into database with ON CONFLICT UPDATE
+    try {
+      const sql = `
+        INSERT INTO restaurant_whatsapp_integrations (
+          restaurant_id, provider, connection_mode, waba_id, phone_number_id,
+          business_id, display_phone_number, verified_name, quality_rating,
+          status, encrypted_access_token, token_iv, token_auth_tag,
+          raw_setup_data, connected_at, updated_at
+        ) VALUES (
+          $1, 'META', 'COEXISTENCE', $2, $3,
+          $4, $5, $6, $7,
+          'CONNECTED', $8, $9, $10,
+          $11, NOW(), NOW()
+        )
+        ON CONFLICT (restaurant_id) DO UPDATE SET
+          provider = 'META',
+          connection_mode = 'COEXISTENCE',
+          waba_id = COALESCE(NULLIF(EXCLUDED.waba_id, ''), restaurant_whatsapp_integrations.waba_id),
+          phone_number_id = COALESCE(NULLIF(EXCLUDED.phone_number_id, ''), restaurant_whatsapp_integrations.phone_number_id),
+          business_id = COALESCE(NULLIF(EXCLUDED.business_id, ''), restaurant_whatsapp_integrations.business_id),
+          display_phone_number = COALESCE(NULLIF(EXCLUDED.display_phone_number, ''), restaurant_whatsapp_integrations.display_phone_number),
+          verified_name = COALESCE(NULLIF(EXCLUDED.verified_name, ''), restaurant_whatsapp_integrations.verified_name),
+          quality_rating = COALESCE(NULLIF(EXCLUDED.quality_rating, ''), restaurant_whatsapp_integrations.quality_rating),
+          status = 'CONNECTED',
+          encrypted_access_token = COALESCE(EXCLUDED.encrypted_access_token, restaurant_whatsapp_integrations.encrypted_access_token),
+          token_iv = COALESCE(EXCLUDED.token_iv, restaurant_whatsapp_integrations.token_iv),
+          token_auth_tag = COALESCE(EXCLUDED.token_auth_tag, restaurant_whatsapp_integrations.token_auth_tag),
+          raw_setup_data = EXCLUDED.raw_setup_data,
+          connected_at = NOW(),
+          updated_at = NOW()
+        RETURNING *;
+      `;
+
+      const res = await query(sql, [
+        restaurantId,
+        resolvedWabaId || null,
+        resolvedPhoneNumberId || null,
+        resolvedBusinessId || null,
+        displayPhoneNumber || null,
+        verifiedName || null,
+        qualityRating || null,
+        encryptedToken,
+        ivHex,
+        authTagHex,
+        JSON.stringify(session_data || {}),
+      ]);
+
+      if (res.rows && res.rows.length > 0) {
+        const row = res.rows[0];
+        return {
+          connected: true,
+          restaurantId: row.restaurant_id,
+          provider: 'META',
+          connectionMode: 'COEXISTENCE',
+          wabaId: row.waba_id || undefined,
+          phoneNumberId: row.phone_number_id || undefined,
+          businessId: row.business_id || undefined,
+          displayPhoneNumber: row.display_phone_number || undefined,
+          verifiedName: row.verified_name || undefined,
+          qualityRating: row.quality_rating || undefined,
+          status: 'CONNECTED',
+          connectedAt: new Date(row.connected_at).toISOString(),
+          updatedAt: new Date(row.updated_at).toISOString(),
+        };
+      }
+    } catch (err: any) {
+      console.warn('[WhatsAppCoexistence] DB write warning, updating in-memory store:', err.message);
+      if (!inMemoryDb.restaurant_whatsapp_integrations) {
+        inMemoryDb.restaurant_whatsapp_integrations = [];
+      }
+      const existingIdx = inMemoryDb.restaurant_whatsapp_integrations.findIndex(
+        (i: any) => i.restaurant_id === restaurantId
+      );
+      const record = {
+        id: crypto.randomUUID(),
+        restaurant_id: restaurantId,
+        provider: 'META',
+        connection_mode: 'COEXISTENCE',
+        waba_id: resolvedWabaId,
+        phone_number_id: resolvedPhoneNumberId,
+        business_id: resolvedBusinessId,
+        display_phone_number: displayPhoneNumber,
+        verified_name: verifiedName,
+        quality_rating: qualityRating,
+        status: 'CONNECTED',
+        encrypted_access_token: encryptedToken,
+        token_iv: ivHex,
+        token_auth_tag: authTagHex,
+        raw_setup_data: session_data || {},
+        connected_at: now,
+        updated_at: now,
+      };
+      if (existingIdx >= 0) {
+        inMemoryDb.restaurant_whatsapp_integrations[existingIdx] = {
+          ...inMemoryDb.restaurant_whatsapp_integrations[existingIdx],
+          ...record,
+        };
+      } else {
+        inMemoryDb.restaurant_whatsapp_integrations.push(record);
+      }
+    }
+
+    return {
+      connected: true,
+      restaurantId,
+      provider: 'META',
+      connectionMode: 'COEXISTENCE',
+      wabaId: resolvedWabaId || undefined,
+      phoneNumberId: resolvedPhoneNumberId || undefined,
+      businessId: resolvedBusinessId || undefined,
+      displayPhoneNumber: displayPhoneNumber || undefined,
+      verifiedName: verifiedName || undefined,
+      qualityRating: qualityRating || undefined,
+      status: 'CONNECTED',
+      connectedAt: now,
+      updatedAt: now,
+    };
+  }
+
+  /**
+   * Disconnect WhatsApp integration from Starters4U
+   * Non-destructive: Does NOT delete/migrate the merchant's WhatsApp Business mobile app account.
+   */
+  public async disconnect(restaurantId: string): Promise<boolean> {
+    if (!restaurantId) return false;
+
+    try {
+      await query(
+        `UPDATE restaurant_whatsapp_integrations
+         SET status = 'DISCONNECTED', updated_at = NOW()
+         WHERE restaurant_id = $1`,
+        [restaurantId]
+      );
+    } catch (err: any) {
+      console.warn('[WhatsAppCoexistence] Disconnect DB warning:', err.message);
+    }
+
+    if (!isPostgresRunning() && inMemoryDb.restaurant_whatsapp_integrations) {
+      const rec = inMemoryDb.restaurant_whatsapp_integrations.find(
+        (i: any) => i.restaurant_id === restaurantId
+      );
+      if (rec) {
+        rec.status = 'DISCONNECTED';
+        rec.updated_at = new Date().toISOString();
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Platform Admin View: Get WhatsApp status across all restaurants
+   */
+  public async getAllRestaurantIntegrations(): Promise<any[]> {
+    try {
+      const res = await query(`
+        SELECT r.id AS restaurant_id, r.name AS restaurant_name, r.slug AS restaurant_slug,
+               COALESCE(w.status, 'NOT_CONNECTED') AS whatsapp_status,
+               w.connection_mode, w.display_phone_number, w.waba_id, w.phone_number_id,
+               w.business_id, w.connected_at, w.updated_at
+        FROM restaurants r
+        LEFT JOIN restaurant_whatsapp_integrations w ON r.id = w.restaurant_id
+        ORDER BY r.name ASC
+      `);
+      return res.rows || [];
+    } catch (err: any) {
+      console.warn('[WhatsAppCoexistence] Error getting all integrations:', err.message);
+      // Fallback
+      return inMemoryDb.restaurants.map((r: any) => {
+        const w = (inMemoryDb.restaurant_whatsapp_integrations || []).find((i: any) => i.restaurant_id === r.id);
+        return {
+          restaurant_id: r.id,
+          restaurant_name: r.name,
+          restaurant_slug: r.slug,
+          whatsapp_status: w?.status || 'NOT_CONNECTED',
+          connection_mode: w?.connection_mode || 'COEXISTENCE',
+          display_phone_number: w?.display_phone_number,
+          waba_id: w?.waba_id,
+          phone_number_id: w?.phone_number_id,
+          business_id: w?.business_id,
+          connected_at: w?.connected_at,
+          updated_at: w?.updated_at,
+        };
+      });
+    }
+  }
+}
+
+export const whatsappCoexistenceService = new WhatsAppCoexistenceService();

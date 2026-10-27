@@ -42,6 +42,7 @@ import {
   Share2,
   Edit2,
   Archive,
+  MessageSquare,
 } from 'lucide-react';
 
 type PlatformTab = 'dashboard' | 'restaurants' | 'onboarding' | 'subscriptions' | 'system';
@@ -60,6 +61,9 @@ interface RestaurantSummary {
   orderCount: number;
   totalRevenue: number;
   createdAt: string;
+  whatsappStatus?: 'CONNECTED' | 'DISCONNECTED' | 'NOT_CONNECTED';
+  whatsappPhone?: string;
+  whatsappMode?: string;
 }
 
 interface RestaurantDetail {
@@ -979,6 +983,7 @@ export const PlatformAdminApp: React.FC = () => {
                     <th className="px-6 py-3.5">Main Branch</th>
                     <th className="px-6 py-3.5">Status</th>
                     <th className="px-6 py-3.5">Plan</th>
+                    <th className="px-6 py-3.5">WhatsApp</th>
                     <th className="px-6 py-3.5">Onboarding</th>
                     <th className="px-6 py-3.5">Orders & GMV</th>
                     <th className="px-6 py-3.5 text-right">Actions</th>
@@ -1038,6 +1043,18 @@ export const PlatformAdminApp: React.FC = () => {
                         <span className="px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-slate-300 border border-slate-700">
                           {rest.planName}
                         </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        {rest.whatsappStatus === 'CONNECTED' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            Coexistence
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium bg-slate-900 text-slate-500 border border-slate-800">
+                            Not Linked
+                          </span>
+                        )}
                       </td>
                       <td className="px-6 py-4">
                         <span

@@ -53,6 +53,9 @@ export interface PlatformRestaurantSummary {
   onboardingStatus: 'NOT_STARTED' | 'IN_PROGRESS' | 'READY';
   orderCount: number;
   totalRevenue: number;
+  whatsappStatus?: string;
+  whatsappPhone?: string;
+  whatsappMode?: string;
   createdAt: string;
 }
 
@@ -634,6 +637,9 @@ export async function getPlatformRestaurants(): Promise<PlatformRestaurantSummar
           COALESCE(b.name, 'Main Outlet') as main_branch_name,
           COALESCE(s.plan_name, 'growth') as plan_name,
           COALESCE(o.overall_status, 'IN_PROGRESS') as onboarding_status,
+          COALESCE(w.status, 'NOT_CONNECTED') as whatsapp_status,
+          w.display_phone_number as whatsapp_phone,
+          COALESCE(w.connection_mode, 'COEXISTENCE') as whatsapp_mode,
           COUNT(DISTINCT ord.id)::int as order_count,
           COALESCE(SUM(ord.grand_total), 0)::float as total_revenue
         FROM restaurants r
@@ -642,7 +648,8 @@ export async function getPlatformRestaurants(): Promise<PlatformRestaurantSummar
         LEFT JOIN subscriptions s ON r.id = s.restaurant_id
         LEFT JOIN restaurant_onboarding o ON r.id = o.restaurant_id
         LEFT JOIN orders ord ON r.id = ord.restaurant_id
-        GROUP BY r.id, r.name, r.slug, r.owner_name, u.name, r.phone, u.phone, r.email, r.status, r.created_at, b.name, s.plan_name, o.overall_status
+        LEFT JOIN restaurant_whatsapp_integrations w ON r.id = w.restaurant_id
+        GROUP BY r.id, r.name, r.slug, r.owner_name, u.name, r.phone, u.phone, r.email, r.status, r.created_at, b.name, s.plan_name, o.overall_status, w.status, w.display_phone_number, w.connection_mode
         ORDER BY r.created_at DESC;
       `;
       const res = await query(sql);
@@ -657,6 +664,9 @@ export async function getPlatformRestaurants(): Promise<PlatformRestaurantSummar
         status: row.status,
         planName: row.plan_name,
         onboardingStatus: row.onboarding_status,
+        whatsappStatus: row.whatsapp_status,
+        whatsappPhone: row.whatsapp_phone,
+        whatsappMode: row.whatsapp_mode,
         orderCount: Number(row.order_count || 0),
         totalRevenue: Number(row.total_revenue || 0),
         createdAt: row.created_at,
@@ -673,6 +683,7 @@ export async function getPlatformRestaurants(): Promise<PlatformRestaurantSummar
     const sub = inMemoryDb.subscriptions.find((s) => s.restaurant_id === r.id);
     const onboard = (inMemoryDb.restaurant_onboarding || []).find((o) => o.restaurant_id === r.id);
     const orders = inMemoryDb.orders.filter((o) => o.restaurant_id === r.id);
+    const w = (inMemoryDb.restaurant_whatsapp_integrations || []).find((i: any) => i.restaurant_id === r.id);
 
     return {
       id: r.id,
@@ -685,6 +696,9 @@ export async function getPlatformRestaurants(): Promise<PlatformRestaurantSummar
       status: r.status || 'active',
       planName: sub?.plan_name || 'growth',
       onboardingStatus: onboard?.overall_status || (r.id.endsWith('1') ? 'READY' : 'IN_PROGRESS'),
+      whatsappStatus: w?.status || 'NOT_CONNECTED',
+      whatsappPhone: w?.display_phone_number,
+      whatsappMode: w?.connection_mode || 'COEXISTENCE',
       orderCount: orders.length,
       totalRevenue: orders.reduce((sum, o) => sum + (o.grand_total || 0), 0),
       createdAt: r.created_at || new Date().toISOString(),
