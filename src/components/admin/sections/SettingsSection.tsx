@@ -84,6 +84,12 @@ export const SettingsSection: React.FC = () => {
   const fbSdkInitializedRef = useRef<boolean>(false);
   const fbSdkLoadingRef = useRef<boolean>(false);
   const safetyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const whatsappMobileNumberRef = useRef<string>(whatsappMobileNumber);
+  const completeOnboardingRef = useRef<(code: string, phone: string) => Promise<void>>((async () => {}) as any);
+
+  useEffect(() => {
+    whatsappMobileNumberRef.current = whatsappMobileNumber;
+  }, [whatsappMobileNumber]);
 
   // Captured Meta Embedded Signup session data (populated via postMessage from Facebook/Meta)
   const capturedSessionRef = useRef<{
@@ -121,10 +127,77 @@ export const SettingsSection: React.FC = () => {
     }
   };
 
+  // Complete onboarding call to backend with authorization code and session details
+  const completeOnboarding = useCallback(
+    async (code: string, cleanNumber: string) => {
+      if (safetyTimeoutRef.current) {
+        clearTimeout(safetyTimeoutRef.current);
+        safetyTimeoutRef.current = null;
+      }
+      console.log('[WhatsApp Coexistence] Auth code received');
+
+      try {
+        const onboardRes = await adminFetch('/api/admin/whatsapp/onboard-coexistence', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            code,
+            wabaId: capturedSessionRef.current.wabaId,
+            phoneNumberId: capturedSessionRef.current.phoneNumberId,
+            businessId: capturedSessionRef.current.businessId,
+            whatsappBusinessNumber: cleanNumber,
+          }),
+        });
+
+        const result = await onboardRes.json();
+        console.log('[WhatsApp Coexistence] Backend response:', result);
+        if (onboardRes.ok && result.success) {
+          setWhatsAppIntegration(result.integration);
+          setWhatsAppSuccess(
+            'WhatsApp Business App successfully connected in Coexistence mode!'
+          );
+          soundService.playChime('notification');
+        } else {
+          setWhatsAppError(result.error || 'Failed to complete WhatsApp onboarding');
+        }
+      } catch (postErr: any) {
+        console.error('[WhatsApp Coexistence] Backend verification failure:', postErr);
+        setWhatsAppError(postErr?.message || 'Error communicating with Starters4U server');
+      } finally {
+        setIsConnectingWhatsApp(false);
+      }
+    },
+    [adminFetch]
+  );
+
+  useEffect(() => {
+    completeOnboardingRef.current = completeOnboarding;
+  }, [completeOnboarding]);
+
   // Listen for Meta Embedded Signup session information using window message events
   useEffect(() => {
     const handleMetaMessage = (event: MessageEvent) => {
-      // Validate event origin is from Facebook/Meta before processing it
+      // 1. Direct popup callback from whatsapp-callback.html (same-origin message)
+      if (event.origin === window.location.origin && event.data?.type === 'WA_EMBEDDED_SIGNUP_AUTH_RESPONSE') {
+        const { code, error } = event.data;
+        if (code) {
+          console.log('[WhatsApp Coexistence] Auth code received from callback popup');
+          const clean = (whatsappMobileNumberRef.current || '').replace(/\D/g, '');
+          completeOnboardingRef.current(code, clean);
+        } else if (error) {
+          if (safetyTimeoutRef.current) {
+            clearTimeout(safetyTimeoutRef.current);
+            safetyTimeoutRef.current = null;
+          }
+          setIsConnectingWhatsApp(false);
+          setWhatsAppError(error || 'Meta authorization was cancelled or failed.');
+        }
+        return;
+      }
+
+      // 2. Validate event origin is from Facebook/Meta before processing it
       if (event.origin !== 'https://www.facebook.com' && event.origin !== 'https://web.facebook.com') {
         return;
       }
@@ -140,8 +213,15 @@ export const SettingsSection: React.FC = () => {
           const phoneNumberId = payload.phone_number_id || payload.phoneNumberId;
           const businessId = payload.business_id || payload.businessId;
           const status = payload.status || payload.current_step || data.event;
+          const authCode = payload.code || data.code;
 
-          console.log('[WhatsApp Coexistence] Embedded Signup event:', data.type || data.event || 'session_info', status || 'received');
+          console.log('[WhatsApp Coexistence] Session received:', {
+            event: data.type || data.event || 'session_info',
+            wabaId,
+            phoneNumberId,
+            businessId,
+            status,
+          });
 
           capturedSessionRef.current = {
             ...capturedSessionRef.current,
@@ -150,6 +230,11 @@ export const SettingsSection: React.FC = () => {
             ...(businessId ? { businessId: String(businessId) } : {}),
             ...(status ? { status: String(status) } : {}),
           };
+
+          if (authCode) {
+            const clean = (whatsappMobileNumberRef.current || '').replace(/\D/g, '');
+            completeOnboardingRef.current(authCode, clean);
+          }
         }
       } catch {
         // Non-JSON message from external frame, safely ignore
@@ -236,27 +321,14 @@ export const SettingsSection: React.FC = () => {
         return;
       }
 
-      if (window.FB && fbSdkInitializedRef.current) {
+      // If already initialized and FB.login is ready, resolve immediately
+      if (window.FB && typeof window.FB.login === 'function') {
+        fbSdkInitializedRef.current = true;
         console.log('[WhatsApp Coexistence] FB SDK status: ready');
         resolve(true);
         return;
       }
 
-      if (fbSdkLoadingRef.current) {
-        const checkInterval = setInterval(() => {
-          if (window.FB && fbSdkInitializedRef.current) {
-            clearInterval(checkInterval);
-            resolve(true);
-          }
-        }, 100);
-        setTimeout(() => {
-          clearInterval(checkInterval);
-          resolve(Boolean(window.FB && fbSdkInitializedRef.current));
-        }, 8000);
-        return;
-      }
-
-      fbSdkLoadingRef.current = true;
       const metaAppId = appId || '1869728914394014';
 
       const doInit = () => {
@@ -265,7 +337,7 @@ export const SettingsSection: React.FC = () => {
             window.FB.init({
               appId: metaAppId,
               cookie: true,
-              xfbml: true,
+              xfbml: false,
               version: 'v21.0',
             });
             fbSdkInitializedRef.current = true;
@@ -274,13 +346,18 @@ export const SettingsSection: React.FC = () => {
             resolve(true);
           } else {
             fbSdkLoadingRef.current = false;
-            console.error('[WhatsApp Coexistence] window.FB not available on initialization');
             resolve(false);
           }
         } catch (err) {
+          // If init throws or was already called, check if FB.login is available
           fbSdkLoadingRef.current = false;
-          console.error('[WhatsApp Coexistence] Error during FB.init:', err);
-          resolve(false);
+          if (window.FB && typeof window.FB.login === 'function') {
+            fbSdkInitializedRef.current = true;
+            resolve(true);
+          } else {
+            console.warn('[WhatsApp Coexistence] FB.init note:', err);
+            resolve(false);
+          }
         }
       };
 
@@ -293,28 +370,43 @@ export const SettingsSection: React.FC = () => {
         doInit();
       };
 
-      if (!document.getElementById('facebook-jssdk')) {
+      const existingScript = document.getElementById('facebook-jssdk') as HTMLScriptElement | null;
+      if (!existingScript) {
+        fbSdkLoadingRef.current = true;
         const js = document.createElement('script');
         js.id = 'facebook-jssdk';
         js.src = 'https://connect.facebook.net/en_US/sdk.js';
         js.async = true;
         js.defer = true;
+        js.crossOrigin = 'anonymous';
         js.onload = () => {
-          if (window.FB && !fbSdkInitializedRef.current) {
+          if (window.FB) {
             doInit();
           }
         };
         js.onerror = (err) => {
           fbSdkLoadingRef.current = false;
-          console.error('[WhatsApp Coexistence] Failed to load Meta SDK script:', err);
+          console.warn('[WhatsApp Coexistence] Meta SDK script not accessible (adblocker/tracking protection):', err);
           resolve(false);
         };
         document.body.appendChild(js);
-      } else {
-        if (window.FB) {
-          doInit();
-        }
       }
+
+      // Check with polling for up to 2 seconds so UI is never blocked
+      let elapsed = 0;
+      const pollTimer = setInterval(() => {
+        elapsed += 100;
+        if (window.FB && typeof window.FB.login === 'function') {
+          clearInterval(pollTimer);
+          fbSdkInitializedRef.current = true;
+          fbSdkLoadingRef.current = false;
+          resolve(true);
+        } else if (elapsed >= 2000) {
+          clearInterval(pollTimer);
+          fbSdkLoadingRef.current = false;
+          resolve(Boolean(window.FB && typeof window.FB.login === 'function'));
+        }
+      }, 100);
     });
   }, []);
 
@@ -324,6 +416,78 @@ export const SettingsSection: React.FC = () => {
       initMetaSdk(whatsAppConfig?.appId || '');
     }
   }, [activeTab, whatsAppConfig, initMetaSdk]);
+
+  // Direct OAuth Dialog Popup for WhatsApp Business Coexistence
+  const launchDirectPopup = useCallback(
+    (configId: string, appId: string, cleanNumber: string) => {
+      try {
+        const redirectUri = window.location.origin + '/whatsapp-callback.html';
+        const extras = JSON.stringify({
+          setup: {},
+          featureType: 'whatsapp_business_app_onboarding',
+          sessionInfoVersion: '3',
+        });
+        const popupUrl =
+          `https://www.facebook.com/v21.0/dialog/oauth?` +
+          `client_id=${encodeURIComponent(appId)}&` +
+          `config_id=${encodeURIComponent(configId)}&` +
+          `response_type=code&` +
+          `override_default_response_type=true&` +
+          `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+          `extras=${encodeURIComponent(extras)}`;
+
+        const width = 600;
+        const height = 750;
+        const left = Math.max(0, Math.floor((window.innerWidth - width) / 2 + window.screenX));
+        const top = Math.max(0, Math.floor((window.innerHeight - height) / 2 + window.screenY));
+
+        console.log('[WhatsApp Coexistence] Launching direct Embedded Signup popup');
+        const popup = window.open(
+          popupUrl,
+          'MetaWhatsAppCoexistenceOnboarding',
+          `width=${width},height=${height},top=${top},left=${left},scrollbars=yes,status=no,resizable=yes`
+        );
+
+        if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+          if (safetyTimeoutRef.current) {
+            clearTimeout(safetyTimeoutRef.current);
+            safetyTimeoutRef.current = null;
+          }
+          setIsConnectingWhatsApp(false);
+          setWhatsAppError('Popup was blocked by your browser. Please allow popups for this site and click Connect again.');
+          return;
+        }
+
+        // Monitor popup closure
+        const pollTimer = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(pollTimer);
+            setTimeout(() => {
+              setIsConnectingWhatsApp((prev) => {
+                if (prev) {
+                  if (safetyTimeoutRef.current) {
+                    clearTimeout(safetyTimeoutRef.current);
+                    safetyTimeoutRef.current = null;
+                  }
+                  return false;
+                }
+                return false;
+              });
+            }, 1000);
+          }
+        }, 500);
+      } catch (popupErr: any) {
+        if (safetyTimeoutRef.current) {
+          clearTimeout(safetyTimeoutRef.current);
+          safetyTimeoutRef.current = null;
+        }
+        setIsConnectingWhatsApp(false);
+        console.error('[WhatsApp Coexistence] Failed to open popup window:', popupErr);
+        setWhatsAppError('Unable to open Meta login window. Please allow popups and try again.');
+      }
+    },
+    []
+  );
 
   // Launch Meta Embedded Signup for WhatsApp Business App Coexistence
   const handleConnectWhatsApp = async () => {
@@ -340,36 +504,27 @@ export const SettingsSection: React.FC = () => {
     const normalizedPhone = `+91${cleanNumber}`;
     console.log('[WhatsApp Coexistence] Phone normalized: ' + normalizedPhone);
 
-    // 2. Verify Meta JavaScript SDK exists and FB.init has completed
-    // Do NOT set the button to loading until the SDK is ready
+    // 2. Check Meta JavaScript SDK availability
     let isReady = Boolean(
       typeof window !== 'undefined' &&
         window.FB &&
-        typeof window.FB.login === 'function' &&
-        fbSdkInitializedRef.current
+        typeof window.FB.login === 'function'
     );
 
     if (!isReady) {
       console.log('[WhatsApp Coexistence] FB SDK status: not_ready (initializing)');
       const initialized = await initMetaSdk(whatsAppConfig?.appId || '');
       isReady = Boolean(
-        initialized &&
-          typeof window !== 'undefined' &&
-          window.FB &&
-          typeof window.FB.login === 'function'
+        initialized ||
+          (typeof window !== 'undefined' &&
+            window.FB &&
+            typeof window.FB.login === 'function')
       );
     }
 
-    console.log('[WhatsApp Coexistence] FB SDK status:', isReady ? 'ready' : 'failed');
+    console.log('[WhatsApp Coexistence] FB SDK status:', isReady ? 'ready' : 'fallback_popup');
 
-    if (!isReady || !window.FB || typeof window.FB.login !== 'function') {
-      console.error('[WhatsApp Coexistence] Real error: Meta Facebook SDK failed to initialize or window.FB is unavailable');
-      setIsConnectingWhatsApp(false);
-      setWhatsAppError('Unable to load Meta login. Please refresh and try again.');
-      return;
-    }
-
-    // 3. Set connecting immediately before FB.login()
+    // 3. Set connecting immediately before opening flow
     setIsConnectingWhatsApp(true);
 
     // 4. Start 30-second safety timeout so UI never remains permanently in connecting state
@@ -396,56 +551,31 @@ export const SettingsSection: React.FC = () => {
     });
 
     const configId = whatsAppConfig?.configId || '1869728914394014';
+    const metaAppId = whatsAppConfig?.appId || '1869728914394014';
 
     // Reset session capture
     capturedSessionRef.current = {};
 
     console.log('[WhatsApp Coexistence] Launching Embedded Signup');
 
-    try {
-      window.FB.login(
-        async (response: any) => {
-          // Clear 30s safety timeout immediately upon callback
-          if (safetyTimeoutRef.current) {
-            clearTimeout(safetyTimeoutRef.current);
-            safetyTimeoutRef.current = null;
-          }
+    // If FB SDK is available, use FB.login with standard config
+    if (isReady && window.FB && typeof window.FB.login === 'function') {
+      try {
+        window.FB.login(
+          (response: any) => {
+            console.log('[WhatsApp Coexistence] FB.login callback:', {
+              status: response?.status,
+              hasAuthResponse: Boolean(response?.authResponse),
+              hasCode: Boolean(response?.authResponse?.code),
+            });
 
-          console.log('[WhatsApp Coexistence] FB.login callback:', {
-            status: response?.status,
-            hasAuthResponse: Boolean(response?.authResponse),
-            hasCode: Boolean(response?.authResponse?.code),
-          });
-
-          try {
             if (response && response.authResponse && response.authResponse.code) {
-              const code = response.authResponse.code;
-              const onboardRes = await adminFetch('/api/admin/whatsapp/onboard-coexistence', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  code,
-                  wabaId: capturedSessionRef.current.wabaId,
-                  phoneNumberId: capturedSessionRef.current.phoneNumberId,
-                  businessId: capturedSessionRef.current.businessId,
-                  whatsappBusinessNumber: cleanNumber,
-                }),
-              });
-
-              const result = await onboardRes.json();
-              if (onboardRes.ok && result.success) {
-                setWhatsAppIntegration(result.integration);
-                setWhatsAppSuccess(
-                  'WhatsApp Business App successfully connected in Coexistence mode!'
-                );
-                soundService.playChime('notification');
-              } else {
-                setWhatsAppError(result.error || 'Failed to complete WhatsApp onboarding');
-              }
+              completeOnboarding(response.authResponse.code, cleanNumber);
             } else {
-              // Popup cancelled, closed, or Meta error
+              if (safetyTimeoutRef.current) {
+                clearTimeout(safetyTimeoutRef.current);
+                safetyTimeoutRef.current = null;
+              }
               if (response?.status === 'unknown') {
                 setWhatsAppError('WhatsApp connection window was closed or cancelled.');
               } else {
@@ -454,34 +584,27 @@ export const SettingsSection: React.FC = () => {
                     'Could not obtain authorization code from Meta. Please retry.'
                 );
               }
+              setIsConnectingWhatsApp(false);
             }
-          } catch (postErr: any) {
-            console.error('[WhatsApp Coexistence] Backend verification failure:', postErr);
-            setWhatsAppError(postErr?.message || 'Error communicating with Starters4U server');
-          } finally {
-            // Reset connecting state in all callback outcomes
-            setIsConnectingWhatsApp(false);
-          }
-        },
-        {
-          config_id: configId,
-          response_type: 'code',
-          override_default_response_type: true,
-          extras: {
-            setup: {},
-            featureType: 'whatsapp_business_app_onboarding',
-            sessionInfoVersion: '3',
           },
-        }
-      );
-    } catch (launchErr: any) {
-      if (safetyTimeoutRef.current) {
-        clearTimeout(safetyTimeoutRef.current);
-        safetyTimeoutRef.current = null;
+          {
+            config_id: configId,
+            response_type: 'code',
+            override_default_response_type: true,
+            extras: {
+              setup: {},
+              featureType: 'whatsapp_business_app_onboarding',
+              sessionInfoVersion: '3',
+            },
+          }
+        );
+      } catch (launchErr: any) {
+        console.warn('[WhatsApp Coexistence] FB.login exception, launching direct popup fallback:', launchErr);
+        launchDirectPopup(configId, metaAppId, cleanNumber);
       }
-      console.error('[WhatsApp Coexistence] JavaScript exception launching FB.login:', launchErr);
-      setIsConnectingWhatsApp(false);
-      setWhatsAppError('Unable to load Meta login. Please refresh and try again.');
+    } else {
+      // Seamless direct popup fallback (handles browsers with adblockers blocking connect.facebook.net)
+      launchDirectPopup(configId, metaAppId, cleanNumber);
     }
   };
 
