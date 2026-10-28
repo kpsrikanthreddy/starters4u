@@ -1391,10 +1391,14 @@ export function createApp(): express.Application {
           fallbackPhone
         );
 
+        const isActuallyConnected = Boolean(result.connected && result.status === 'CONNECTED');
         res.json({
-          success: true,
-          message: 'WhatsApp Business App Coexistence connected successfully!',
+          success: isActuallyConnected,
+          message: isActuallyConnected
+            ? 'WhatsApp Business App Coexistence connected successfully!'
+            : 'Meta Embedded Signup did not return required WhatsApp Business Account (WABA) or Phone Number ID. Setup is incomplete.',
           integration: result,
+          setupIncomplete: !isActuallyConnected,
         });
       } catch (err: any) {
         console.error('[Admin WhatsApp Onboard Error]:', err);

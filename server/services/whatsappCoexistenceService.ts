@@ -74,7 +74,7 @@ export interface WhatsAppIntegrationPublicInfo {
   whatsappBusinessNumber?: string;
   verifiedName?: string;
   qualityRating?: string;
-  status: 'CONNECTED' | 'DISCONNECTED' | 'NOT_CONNECTED';
+  status: 'CONNECTED' | 'DISCONNECTED' | 'NOT_CONNECTED' | 'SETUP_INCOMPLETE' | 'ACTION_REQUIRED' | 'PENDING';
   connectedAt?: string;
   updatedAt?: string;
 }
@@ -199,7 +199,22 @@ class WhatsAppCoexistenceService {
 
       if (res.rows && res.rows.length > 0) {
         const row = res.rows[0];
-        const isConnected = row.status === 'CONNECTED';
+        const hasValidIds = Boolean(
+          row.waba_id && String(row.waba_id).trim() &&
+          row.phone_number_id && String(row.phone_number_id).trim()
+        );
+        const isConnected = row.status === 'CONNECTED' && hasValidIds;
+        let effectiveStatus: 'CONNECTED' | 'DISCONNECTED' | 'NOT_CONNECTED' | 'SETUP_INCOMPLETE' | 'ACTION_REQUIRED' | 'PENDING' = 'NOT_CONNECTED';
+        if (isConnected) {
+          effectiveStatus = 'CONNECTED';
+        } else if (row.status === 'CONNECTED' && !hasValidIds) {
+          effectiveStatus = 'SETUP_INCOMPLETE';
+        } else if (row.status === 'ACTION_REQUIRED' || row.status === 'PENDING') {
+          effectiveStatus = 'SETUP_INCOMPLETE';
+        } else {
+          effectiveStatus = row.status || 'NOT_CONNECTED';
+        }
+
         return {
           connected: isConnected,
           restaurantId: row.restaurant_id,
@@ -212,8 +227,8 @@ class WhatsAppCoexistenceService {
           whatsappBusinessNumber: row.whatsapp_business_number || undefined,
           verifiedName: row.verified_name || undefined,
           qualityRating: row.quality_rating || undefined,
-          status: isConnected ? 'CONNECTED' : 'DISCONNECTED',
-          connectedAt: row.connected_at ? new Date(row.connected_at).toISOString() : undefined,
+          status: effectiveStatus,
+          connectedAt: isConnected && row.connected_at ? new Date(row.connected_at).toISOString() : undefined,
           updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
         };
       }
@@ -224,7 +239,22 @@ class WhatsAppCoexistenceService {
           (i: any) => i.restaurant_id === restaurantId
         );
         if (inMem) {
-          const isConnected = inMem.status === 'CONNECTED';
+          const hasValidIds = Boolean(
+            inMem.waba_id && String(inMem.waba_id).trim() &&
+            inMem.phone_number_id && String(inMem.phone_number_id).trim()
+          );
+          const isConnected = inMem.status === 'CONNECTED' && hasValidIds;
+          let effectiveStatus: 'CONNECTED' | 'DISCONNECTED' | 'NOT_CONNECTED' | 'SETUP_INCOMPLETE' | 'ACTION_REQUIRED' | 'PENDING' = 'NOT_CONNECTED';
+          if (isConnected) {
+            effectiveStatus = 'CONNECTED';
+          } else if (inMem.status === 'CONNECTED' && !hasValidIds) {
+            effectiveStatus = 'SETUP_INCOMPLETE';
+          } else if (inMem.status === 'ACTION_REQUIRED' || inMem.status === 'PENDING') {
+            effectiveStatus = 'SETUP_INCOMPLETE';
+          } else {
+            effectiveStatus = inMem.status || 'NOT_CONNECTED';
+          }
+
           return {
             connected: isConnected,
             restaurantId: inMem.restaurant_id,
@@ -237,8 +267,8 @@ class WhatsAppCoexistenceService {
             whatsappBusinessNumber: inMem.whatsapp_business_number,
             verifiedName: inMem.verified_name,
             qualityRating: inMem.quality_rating,
-            status: isConnected ? 'CONNECTED' : 'DISCONNECTED',
-            connectedAt: inMem.connected_at,
+            status: effectiveStatus,
+            connectedAt: isConnected && inMem.connected_at ? inMem.connected_at : undefined,
             updatedAt: inMem.updated_at,
           };
         }
@@ -373,6 +403,14 @@ class WhatsAppCoexistenceService {
 
     const now = new Date().toISOString();
 
+    // Validate returned Meta identifiers
+    const hasValidIds = Boolean(
+      resolvedWabaId && String(resolvedWabaId).trim() &&
+      resolvedPhoneNumberId && String(resolvedPhoneNumberId).trim()
+    );
+
+    const determinedStatus: 'CONNECTED' | 'ACTION_REQUIRED' = hasValidIds ? 'CONNECTED' : 'ACTION_REQUIRED';
+
     // Persist into database with ON CONFLICT UPDATE
     try {
       const sql = `
@@ -384,8 +422,8 @@ class WhatsAppCoexistenceService {
         ) VALUES (
           $1, 'META', 'COEXISTENCE', $2, $3,
           $4, $5, $6, $7, $8,
-          'CONNECTED', $9, $10, $11,
-          $12, NOW(), NOW()
+          $9, $10, $11, $12,
+          $13, ${hasValidIds ? 'NOW()' : 'NULL'}, NOW()
         )
         ON CONFLICT (restaurant_id) DO UPDATE SET
           provider = 'META',
@@ -397,12 +435,12 @@ class WhatsAppCoexistenceService {
           whatsapp_business_number = COALESCE(NULLIF(EXCLUDED.whatsapp_business_number, ''), restaurant_whatsapp_integrations.whatsapp_business_number),
           verified_name = COALESCE(NULLIF(EXCLUDED.verified_name, ''), restaurant_whatsapp_integrations.verified_name),
           quality_rating = COALESCE(NULLIF(EXCLUDED.quality_rating, ''), restaurant_whatsapp_integrations.quality_rating),
-          status = 'CONNECTED',
+          status = $9,
           encrypted_access_token = COALESCE(EXCLUDED.encrypted_access_token, restaurant_whatsapp_integrations.encrypted_access_token),
           token_iv = COALESCE(EXCLUDED.token_iv, restaurant_whatsapp_integrations.token_iv),
           token_auth_tag = COALESCE(EXCLUDED.token_auth_tag, restaurant_whatsapp_integrations.token_auth_tag),
           raw_setup_data = EXCLUDED.raw_setup_data,
-          connected_at = NOW(),
+          connected_at = ${hasValidIds ? 'COALESCE(restaurant_whatsapp_integrations.connected_at, NOW())' : 'NULL'},
           updated_at = NOW()
         RETURNING *;
       `;
@@ -416,6 +454,7 @@ class WhatsAppCoexistenceService {
         normalizedBusinessNumber || null,
         verifiedName || null,
         qualityRating || null,
+        determinedStatus,
         encryptedToken,
         ivHex,
         authTagHex,
@@ -424,8 +463,9 @@ class WhatsAppCoexistenceService {
 
       if (res.rows && res.rows.length > 0) {
         const row = res.rows[0];
+        const effectiveStatus = hasValidIds ? 'CONNECTED' : 'SETUP_INCOMPLETE';
         return {
-          connected: true,
+          connected: hasValidIds,
           restaurantId: row.restaurant_id,
           provider: 'META',
           connectionMode: 'COEXISTENCE',
@@ -436,8 +476,8 @@ class WhatsAppCoexistenceService {
           whatsappBusinessNumber: row.whatsapp_business_number || normalizedBusinessNumber || undefined,
           verifiedName: row.verified_name || undefined,
           qualityRating: row.quality_rating || undefined,
-          status: 'CONNECTED',
-          connectedAt: new Date(row.connected_at).toISOString(),
+          status: effectiveStatus,
+          connectedAt: hasValidIds && row.connected_at ? new Date(row.connected_at).toISOString() : undefined,
           updatedAt: new Date(row.updated_at).toISOString(),
         };
       }
@@ -461,12 +501,12 @@ class WhatsAppCoexistenceService {
         whatsapp_business_number: normalizedBusinessNumber,
         verified_name: verifiedName,
         quality_rating: qualityRating,
-        status: 'CONNECTED',
+        status: determinedStatus,
         encrypted_access_token: encryptedToken,
         token_iv: ivHex,
         token_auth_tag: authTagHex,
         raw_setup_data: session_data || {},
-        connected_at: now,
+        connected_at: hasValidIds ? now : undefined,
         updated_at: now,
       };
       if (existingIdx >= 0) {
@@ -477,8 +517,9 @@ class WhatsAppCoexistenceService {
       } else {
         inMemoryDb.restaurant_whatsapp_integrations.push(record);
       }
+      const effectiveStatus = hasValidIds ? 'CONNECTED' : 'SETUP_INCOMPLETE';
       return {
-        connected: true,
+        connected: hasValidIds,
         restaurantId,
         provider: 'META',
         connectionMode: 'COEXISTENCE',
@@ -489,8 +530,8 @@ class WhatsAppCoexistenceService {
         whatsappBusinessNumber: normalizedBusinessNumber || undefined,
         verifiedName: verifiedName || undefined,
         qualityRating: qualityRating || undefined,
-        status: 'CONNECTED',
-        connectedAt: now,
+        status: effectiveStatus,
+        connectedAt: hasValidIds ? now : undefined,
         updatedAt: now,
       };
     }

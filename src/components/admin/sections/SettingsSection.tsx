@@ -80,24 +80,43 @@ export const SettingsSection: React.FC = () => {
   const [whatsAppSuccess, setWhatsAppSuccess] = useState<string | null>(null);
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
 
-  // Meta SDK initialization & safety timeout tracking
-  const fbSdkInitializedRef = useRef<boolean>(false);
-  const fbSdkLoadingRef = useRef<boolean>(false);
+  // Synchronization tracking for Meta Embedded Signup (Auth code + FINISH session event)
+  const authCodeRef = useRef<string | null>(null);
+  const finishSessionRef = useRef<{
+    wabaId?: string;
+    phoneNumberId?: string;
+    businessId?: string;
+    rawData?: any;
+  } | null>(null);
+  const finishReceivedRef = useRef<boolean>(false);
+  const submissionTriggeredRef = useRef<boolean>(false);
   const safetyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const whatsappMobileNumberRef = useRef<string>(whatsappMobileNumber);
-  const completeOnboardingRef = useRef<(code: string, phone: string) => Promise<void>>((async () => {}) as any);
+  const fbSdkInitializedRef = useRef<boolean>(false);
+  const fbSdkLoadingRef = useRef<boolean>(false);
+  const executeBackendOnboardingRef = useRef<(code: string, sessionInfo: any) => Promise<void>>((async () => {}) as any);
 
   useEffect(() => {
     whatsappMobileNumberRef.current = whatsappMobileNumber;
   }, [whatsappMobileNumber]);
 
-  // Captured Meta Embedded Signup session data (populated via postMessage from Facebook/Meta)
-  const capturedSessionRef = useRef<{
-    wabaId?: string;
-    phoneNumberId?: string;
-    businessId?: string;
-    status?: string;
-  }>({});
+  const isWhatsAppConnected = Boolean(
+    whatsAppIntegration?.status === 'CONNECTED' &&
+    whatsAppIntegration?.wabaId &&
+    whatsAppIntegration?.phoneNumberId
+  );
+
+  const isWhatsAppSetupIncomplete = Boolean(
+    whatsAppIntegration &&
+    !isWhatsAppConnected &&
+    (
+      whatsAppIntegration.status === 'SETUP_INCOMPLETE' ||
+      whatsAppIntegration.status === 'ACTION_REQUIRED' ||
+      whatsAppIntegration.status === 'PENDING' ||
+      (whatsAppIntegration.status === 'CONNECTED' && (!whatsAppIntegration.wabaId || !whatsAppIntegration.phoneNumberId)) ||
+      Boolean(whatsAppIntegration.businessId || whatsAppIntegration.whatsappBusinessNumber)
+    )
+  );
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -127,14 +146,21 @@ export const SettingsSection: React.FC = () => {
     }
   };
 
-  // Complete onboarding call to backend with authorization code and session details
-  const completeOnboarding = useCallback(
-    async (code: string, cleanNumber: string) => {
+  // Execute onboarding persistence and validation against backend
+  const executeBackendOnboarding = useCallback(
+    async (
+      code: string,
+      sessionInfo: { wabaId?: string; phoneNumberId?: string; businessId?: string; rawData?: any }
+    ) => {
+      if (submissionTriggeredRef.current) return;
+      submissionTriggeredRef.current = true;
+
       if (safetyTimeoutRef.current) {
         clearTimeout(safetyTimeoutRef.current);
         safetyTimeoutRef.current = null;
       }
-      console.log('[WhatsApp Coexistence] Auth code received');
+
+      const cleanNumber = (whatsappMobileNumberRef.current || '').replace(/\D/g, '');
 
       try {
         const onboardRes = await adminFetch('/api/admin/whatsapp/onboard-coexistence', {
@@ -144,26 +170,38 @@ export const SettingsSection: React.FC = () => {
           },
           body: JSON.stringify({
             code,
-            wabaId: capturedSessionRef.current.wabaId,
-            phoneNumberId: capturedSessionRef.current.phoneNumberId,
-            businessId: capturedSessionRef.current.businessId,
-            whatsappBusinessNumber: cleanNumber,
+            waba_id: sessionInfo?.wabaId,
+            phone_number_id: sessionInfo?.phoneNumberId,
+            business_id: sessionInfo?.businessId,
+            session_data: sessionInfo?.rawData,
+            whatsapp_business_number: cleanNumber,
           }),
         });
 
         const result = await onboardRes.json();
-        console.log('[WhatsApp Coexistence] Backend response:', result);
-        if (onboardRes.ok && result.success) {
+        console.log('[WA Embedded Signup] Backend response status:', onboardRes.status);
+        if (
+          onboardRes.ok &&
+          result.success &&
+          result.integration?.status === 'CONNECTED' &&
+          result.integration?.wabaId &&
+          result.integration?.phoneNumberId
+        ) {
           setWhatsAppIntegration(result.integration);
-          setWhatsAppSuccess(
-            'WhatsApp Business App successfully connected in Coexistence mode!'
-          );
+          setWhatsAppSuccess('WhatsApp Business App successfully connected in Coexistence mode!');
           soundService.playChime('notification');
         } else {
-          setWhatsAppError(result.error || 'Failed to complete WhatsApp onboarding');
+          if (result.integration) {
+            setWhatsAppIntegration(result.integration);
+          }
+          setWhatsAppError(
+            result.message ||
+              result.error ||
+              'Setup incomplete: Meta WhatsApp Business Account (WABA) or Phone Number ID verification is incomplete. Please click Continue WhatsApp Setup to finish.'
+          );
         }
       } catch (postErr: any) {
-        console.error('[WhatsApp Coexistence] Backend verification failure:', postErr);
+        console.error('[WA Embedded Signup] Backend verification failure:', postErr);
         setWhatsAppError(postErr?.message || 'Error communicating with Starters4U server');
       } finally {
         setIsConnectingWhatsApp(false);
@@ -173,8 +211,8 @@ export const SettingsSection: React.FC = () => {
   );
 
   useEffect(() => {
-    completeOnboardingRef.current = completeOnboarding;
-  }, [completeOnboarding]);
+    executeBackendOnboardingRef.current = executeBackendOnboarding;
+  }, [executeBackendOnboarding]);
 
   // Listen for Meta Embedded Signup session information using window message events
   useEffect(() => {
@@ -183,9 +221,17 @@ export const SettingsSection: React.FC = () => {
       if (event.origin === window.location.origin && event.data?.type === 'WA_EMBEDDED_SIGNUP_AUTH_RESPONSE') {
         const { code, error } = event.data;
         if (code) {
-          console.log('[WhatsApp Coexistence] Auth code received from callback popup');
-          const clean = (whatsappMobileNumberRef.current || '').replace(/\D/g, '');
-          completeOnboardingRef.current(code, clean);
+          console.log('[WA Embedded Signup] Auth callback received');
+          authCodeRef.current = code;
+          if (finishReceivedRef.current && finishSessionRef.current) {
+            executeBackendOnboardingRef.current(code, finishSessionRef.current);
+          } else {
+            setTimeout(() => {
+              if (!submissionTriggeredRef.current) {
+                executeBackendOnboardingRef.current(code, finishSessionRef.current || {});
+              }
+            }, 3000);
+          }
         } else if (error) {
           if (safetyTimeoutRef.current) {
             clearTimeout(safetyTimeoutRef.current);
@@ -202,38 +248,66 @@ export const SettingsSection: React.FC = () => {
         return;
       }
 
+      console.log('[WA Embedded Signup] Session event received');
+
       try {
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-        if (!data) return;
+        if (!data || typeof data !== 'object') return;
 
-        // Meta Embedded Signup emits events like WA_EMBEDDED_SIGNUP or session payloads
-        if (data.type === 'WA_EMBEDDED_SIGNUP' || data.event === 'FINISH' || data.phone_number_id || data.waba_id) {
-          const payload = data.data || data;
-          const wabaId = payload.waba_id || payload.wabaId;
-          const phoneNumberId = payload.phone_number_id || payload.phoneNumberId;
-          const businessId = payload.business_id || payload.businessId;
-          const status = payload.status || payload.current_step || data.event;
-          const authCode = payload.code || data.code;
+        const eventType = data.type || '';
+        const eventName = data.event || '';
 
-          console.log('[WhatsApp Coexistence] Session received:', {
-            event: data.type || data.event || 'session_info',
-            wabaId,
-            phoneNumberId,
-            businessId,
-            status,
-          });
+        console.log('[WA Embedded Signup] Event type:', eventType || 'unspecified');
+        console.log('[WA Embedded Signup] Event name:', eventName || 'unspecified');
 
-          capturedSessionRef.current = {
-            ...capturedSessionRef.current,
-            ...(wabaId ? { wabaId: String(wabaId) } : {}),
-            ...(phoneNumberId ? { phoneNumberId: String(phoneNumberId) } : {}),
-            ...(businessId ? { businessId: String(businessId) } : {}),
-            ...(status ? { status: String(status) } : {}),
-          };
+        if (eventType === 'WA_EMBEDDED_SIGNUP' || eventName === 'FINISH' || eventName === 'CANCEL' || eventName === 'ERROR') {
+          if (eventName === 'FINISH' || data.event === 'FINISH') {
+            console.log('[WA Embedded Signup] FINISH received');
+            const payload = data.data || data;
+            const wabaId =
+              payload.waba_id ||
+              payload.wabaId ||
+              (Array.isArray(payload.waba_ids) ? payload.waba_ids[0] : null);
+            const phoneNumberId =
+              payload.phone_number_id ||
+              payload.phoneNumberId ||
+              (Array.isArray(payload.phone_number_ids) ? payload.phone_number_ids[0] : null);
+            const businessId = payload.business_id || payload.businessId;
 
-          if (authCode) {
-            const clean = (whatsappMobileNumberRef.current || '').replace(/\D/g, '');
-            completeOnboardingRef.current(authCode, clean);
+            console.log('[WA Embedded Signup] WABA ID received:', wabaId ? 'yes' : 'no');
+            console.log('[WA Embedded Signup] Phone Number ID received:', phoneNumberId ? 'yes' : 'no');
+
+            const sessionInfo = {
+              wabaId: wabaId ? String(wabaId) : undefined,
+              phoneNumberId: phoneNumberId ? String(phoneNumberId) : undefined,
+              businessId: businessId ? String(businessId) : undefined,
+              rawData: payload,
+            };
+
+            finishSessionRef.current = sessionInfo;
+            finishReceivedRef.current = true;
+
+            if (authCodeRef.current) {
+              executeBackendOnboardingRef.current(authCodeRef.current, sessionInfo);
+            }
+          } else if (eventName === 'CANCEL' || data.event === 'CANCEL') {
+            if (safetyTimeoutRef.current) {
+              clearTimeout(safetyTimeoutRef.current);
+              safetyTimeoutRef.current = null;
+            }
+            setIsConnectingWhatsApp(false);
+            setWhatsAppError('WhatsApp onboarding was cancelled.');
+          } else if (eventName === 'ERROR' || data.event === 'ERROR') {
+            if (safetyTimeoutRef.current) {
+              clearTimeout(safetyTimeoutRef.current);
+              safetyTimeoutRef.current = null;
+            }
+            setIsConnectingWhatsApp(false);
+            const errorMsg =
+              data.data?.error_message ||
+              data.error_message ||
+              'Meta encountered an error during onboarding. Please try again.';
+            setWhatsAppError(errorMsg);
           }
         }
       } catch {
@@ -491,7 +565,7 @@ export const SettingsSection: React.FC = () => {
 
   // Launch Meta Embedded Signup for WhatsApp Business App Coexistence
   const handleConnectWhatsApp = async () => {
-    console.log('[WhatsApp Coexistence] Connect clicked');
+    console.log('[WA Embedded Signup] Login started');
     setWhatsAppError(null);
     setWhatsAppSuccess(null);
 
@@ -503,6 +577,12 @@ export const SettingsSection: React.FC = () => {
     }
     const normalizedPhone = `+91${cleanNumber}`;
     console.log('[WhatsApp Coexistence] Phone normalized: ' + normalizedPhone);
+
+    // Reset session and code state
+    authCodeRef.current = null;
+    finishSessionRef.current = null;
+    finishReceivedRef.current = false;
+    submissionTriggeredRef.current = false;
 
     // 2. Check Meta JavaScript SDK availability
     let isReady = Boolean(
@@ -532,7 +612,7 @@ export const SettingsSection: React.FC = () => {
       clearTimeout(safetyTimeoutRef.current);
     }
     safetyTimeoutRef.current = setTimeout(() => {
-      console.warn('[WhatsApp Coexistence] Embedded Signup timed out after 30 seconds');
+      console.warn('[WA Embedded Signup] Embedded Signup timed out after 30 seconds');
       setIsConnectingWhatsApp(false);
       setWhatsAppError('Meta connection timed out. If the popup was blocked by your browser, please allow popups and try again.');
     }, 30000);
@@ -553,38 +633,47 @@ export const SettingsSection: React.FC = () => {
     const configId = whatsAppConfig?.configId || '1869728914394014';
     const metaAppId = whatsAppConfig?.appId || '1928586071146037';
 
-    // Reset session capture
-    capturedSessionRef.current = {};
-
-    console.log('[WhatsApp Coexistence] Launching Embedded Signup');
-
     // If FB SDK is available, use FB.login with standard config
     if (isReady && window.FB && typeof window.FB.login === 'function') {
       try {
         window.FB.login(
           (response: any) => {
-            console.log('[WhatsApp Coexistence] FB.login callback:', {
-              status: response?.status,
-              hasAuthResponse: Boolean(response?.authResponse),
-              hasCode: Boolean(response?.authResponse?.code),
-            });
+            console.log('[WA Embedded Signup] Auth callback received');
 
             if (response && response.authResponse && response.authResponse.code) {
-              completeOnboarding(response.authResponse.code, cleanNumber);
+              authCodeRef.current = response.authResponse.code;
+
+              if (finishReceivedRef.current && finishSessionRef.current) {
+                executeBackendOnboardingRef.current(authCodeRef.current, finishSessionRef.current);
+              } else {
+                // Wait for Meta Embedded Signup window message event to arrive
+                setTimeout(() => {
+                  if (!submissionTriggeredRef.current) {
+                    if (finishReceivedRef.current && finishSessionRef.current) {
+                      executeBackendOnboardingRef.current(authCodeRef.current!, finishSessionRef.current);
+                    } else {
+                      console.warn('[WA Embedded Signup] FINISH event not received before timeout; submitting for validation');
+                      executeBackendOnboardingRef.current(authCodeRef.current!, finishSessionRef.current || {});
+                    }
+                  }
+                }, 3500);
+              }
             } else {
               if (safetyTimeoutRef.current) {
                 clearTimeout(safetyTimeoutRef.current);
                 safetyTimeoutRef.current = null;
               }
-              if (response?.status === 'unknown') {
-                setWhatsAppError('WhatsApp connection window was closed or cancelled.');
-              } else {
-                setWhatsAppError(
-                  response?.error_message ||
-                    'Could not obtain authorization code from Meta. Please retry.'
-                );
+              if (!finishReceivedRef.current) {
+                if (response?.status === 'unknown') {
+                  setWhatsAppError('WhatsApp connection window was closed or cancelled.');
+                } else {
+                  setWhatsAppError(
+                    response?.error_message ||
+                      'Could not obtain authorization code from Meta. Please retry.'
+                  );
+                }
+                setIsConnectingWhatsApp(false);
               }
-              setIsConnectingWhatsApp(false);
             }
           },
           {
@@ -1495,10 +1584,15 @@ export const SettingsSection: React.FC = () => {
 
               {/* Status pill */}
               <div className="flex items-center gap-2">
-                {whatsAppIntegration?.status === 'CONNECTED' ? (
+                {isWhatsAppConnected ? (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                     Connected
+                  </span>
+                ) : isWhatsAppSetupIncomplete ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                    <span className="w-2 h-2 rounded-full bg-amber-500" />
+                    Setup incomplete
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200">
@@ -1510,7 +1604,7 @@ export const SettingsSection: React.FC = () => {
             </div>
 
             {/* Content: Connected vs Not Connected */}
-            {whatsAppIntegration?.status === 'CONNECTED' ? (
+            {isWhatsAppConnected ? (
               <div className="space-y-6">
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                   <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
@@ -1534,9 +1628,9 @@ export const SettingsSection: React.FC = () => {
                   <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
                     <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Phone</div>
                     <div className="font-mono font-bold text-slate-900 text-sm mt-1">
-                      {whatsAppIntegration.whatsappBusinessNumber || whatsAppIntegration.displayPhoneNumber || profile?.phone || 'Connected'}
+                      {whatsAppIntegration?.whatsappBusinessNumber || whatsAppIntegration?.displayPhoneNumber || profile?.phone || 'Connected'}
                     </div>
-                    {whatsAppIntegration.verifiedName && (
+                    {whatsAppIntegration?.verifiedName && (
                       <div className="text-[11px] text-slate-500 mt-1 truncate">
                         {whatsAppIntegration.verifiedName}
                       </div>
@@ -1570,6 +1664,22 @@ export const SettingsSection: React.FC = () => {
               </div>
             ) : (
               <div className="space-y-6">
+                {isWhatsAppSetupIncomplete && (
+                  <div className="p-4 rounded-2xl bg-amber-50/80 border border-amber-200 text-amber-900 space-y-2 shadow-2xs">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span className="font-bold text-xs uppercase tracking-wider">Setup Action Required</span>
+                    </div>
+                    <p className="text-xs text-amber-800 leading-relaxed">
+                      Your restaurant's Meta authorization is registered
+                      {whatsAppIntegration?.businessId ? ` (Business ID: ${whatsAppIntegration.businessId})` : ''}, but the WhatsApp Business Account (WABA) or Phone Number ID verification did not complete.
+                    </p>
+                    <p className="text-xs text-amber-700">
+                      Click <strong>Continue WhatsApp Setup</strong> below to re-open Meta's Embedded Signup and finish linking your WhatsApp account.
+                    </p>
+                  </div>
+                )}
+
                 <div className="p-5 rounded-2xl bg-emerald-50/40 border border-emerald-100 space-y-3">
                   <h4 className="text-xs font-bold text-emerald-950 uppercase tracking-wider flex items-center gap-2">
                     <ShieldCheck className="w-4 h-4 text-emerald-600" />
@@ -1646,6 +1756,11 @@ export const SettingsSection: React.FC = () => {
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
                         Connecting with Meta...
+                      </>
+                    ) : isWhatsAppSetupIncomplete ? (
+                      <>
+                        <MessageSquare className="w-4 h-4" />
+                        Continue WhatsApp Setup
                       </>
                     ) : (
                       <>

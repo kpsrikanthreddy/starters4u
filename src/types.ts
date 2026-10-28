@@ -412,7 +412,7 @@ export interface RestaurantWhatsAppIntegration {
   whatsappBusinessNumber?: string;
   verifiedName?: string;
   qualityRating?: string;
-  status: 'CONNECTED' | 'DISCONNECTED' | 'NOT_CONNECTED';
+  status: 'CONNECTED' | 'DISCONNECTED' | 'NOT_CONNECTED' | 'SETUP_INCOMPLETE' | 'ACTION_REQUIRED' | 'PENDING';
   connectedAt?: string;
   updatedAt?: string;
 }
