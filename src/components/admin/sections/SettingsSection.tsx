@@ -31,6 +31,75 @@ import {
   Unlink,
 } from 'lucide-react';
 
+/**
+ * Safely inspect and log object structure/key names for debugging Meta payloads
+ * STRICTLY REDACTS all sensitive strings (tokens, codes, secrets, credentials)
+ */
+function getObjectStructure(obj: any, depth = 0): any {
+  if (depth > 3 || obj === null || typeof obj !== 'object') {
+    return typeof obj;
+  }
+  if (Array.isArray(obj)) {
+    return `Array[${obj.length}]`;
+  }
+  const result: Record<string, any> = {};
+  for (const k of Object.keys(obj)) {
+    if (/code|token|secret|password|auth/i.test(k)) {
+      result[k] = '[REDACTED]';
+    } else if (typeof obj[k] === 'object' && obj[k] !== null) {
+      result[k] = getObjectStructure(obj[k], depth + 1);
+    } else {
+      result[k] = typeof obj[k];
+    }
+  }
+  return result;
+}
+
+/**
+ * Deep search payload graph for WABA ID, Phone Number ID, and Business ID across any Meta nesting
+ */
+function extractIdsFromPayload(obj: any): { wabaId?: string; phoneNumberId?: string; businessId?: string } {
+  if (!obj || typeof obj !== 'object') return {};
+  let wabaId: string | undefined;
+  let phoneNumberId: string | undefined;
+  let businessId: string | undefined;
+
+  const queue: any[] = [obj];
+  const visited = new Set();
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    if (!cur || typeof cur !== 'object' || visited.has(cur)) continue;
+    visited.add(cur);
+
+    if (!wabaId) {
+      if (cur.waba_id) wabaId = String(cur.waba_id);
+      else if (cur.wabaId) wabaId = String(cur.wabaId);
+      else if (cur.whatsapp_business_account_id) wabaId = String(cur.whatsapp_business_account_id);
+      else if (cur.messaging_account_id) wabaId = String(cur.messaging_account_id);
+      else if (Array.isArray(cur.waba_ids) && cur.waba_ids.length > 0) wabaId = String(cur.waba_ids[0]);
+    }
+
+    if (!phoneNumberId) {
+      if (cur.phone_number_id) phoneNumberId = String(cur.phone_number_id);
+      else if (cur.phoneNumberId) phoneNumberId = String(cur.phoneNumberId);
+      else if (Array.isArray(cur.phone_number_ids) && cur.phone_number_ids.length > 0) phoneNumberId = String(cur.phone_number_ids[0]);
+    }
+
+    if (!businessId) {
+      if (cur.business_id) businessId = String(cur.business_id);
+      else if (cur.businessId) businessId = String(cur.businessId);
+    }
+
+    for (const k of Object.keys(cur)) {
+      if (cur[k] && typeof cur[k] === 'object') {
+        queue.push(cur[k]);
+      }
+    }
+  }
+
+  return { wabaId, phoneNumberId, businessId };
+}
+
 export const SettingsSection: React.FC = () => {
   const { user, restaurant, adminFetch, refreshProfile } = useAdminAuth();
   const [activeTab, setActiveTab] = useState<'profile' | 'payments' | 'subscription' | 'seo' | 'whatsapp'>('profile');
@@ -90,7 +159,6 @@ export const SettingsSection: React.FC = () => {
   } | null>(null);
   const finishReceivedRef = useRef<boolean>(false);
   const submissionTriggeredRef = useRef<boolean>(false);
-  const safetyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const whatsappMobileNumberRef = useRef<string>(whatsappMobileNumber);
   const fbSdkInitializedRef = useRef<boolean>(false);
   const fbSdkLoadingRef = useRef<boolean>(false);
@@ -155,11 +223,6 @@ export const SettingsSection: React.FC = () => {
       if (submissionTriggeredRef.current) return;
       submissionTriggeredRef.current = true;
 
-      if (safetyTimeoutRef.current) {
-        clearTimeout(safetyTimeoutRef.current);
-        safetyTimeoutRef.current = null;
-      }
-
       const cleanNumber = (whatsappMobileNumberRef.current || '').replace(/\D/g, '');
 
       try {
@@ -179,7 +242,7 @@ export const SettingsSection: React.FC = () => {
         });
 
         const result = await onboardRes.json();
-        console.log('[WA Embedded Signup] Backend response status:', onboardRes.status);
+        console.log('[WA EMBEDDED] Backend response status:', onboardRes.status);
         if (
           onboardRes.ok &&
           result.success &&
@@ -191,6 +254,8 @@ export const SettingsSection: React.FC = () => {
           setWhatsAppSuccess('WhatsApp Business App successfully connected in Coexistence mode!');
           soundService.playChime('notification');
         } else {
+          // If setup is incomplete or missing IDs, allow future submission
+          submissionTriggeredRef.current = false;
           if (result.integration) {
             setWhatsAppIntegration(result.integration);
           }
@@ -201,7 +266,8 @@ export const SettingsSection: React.FC = () => {
           );
         }
       } catch (postErr: any) {
-        console.error('[WA Embedded Signup] Backend verification failure:', postErr);
+        submissionTriggeredRef.current = false;
+        console.error('[WA EMBEDDED] Backend verification failure:', postErr);
         setWhatsAppError(postErr?.message || 'Error communicating with Starters4U server');
       } finally {
         setIsConnectingWhatsApp(false);
@@ -215,28 +281,25 @@ export const SettingsSection: React.FC = () => {
   }, [executeBackendOnboarding]);
 
   // Listen for Meta Embedded Signup session information using window message events
+  // Keep the listener active for the entire Embedded Signup process
   useEffect(() => {
     const handleMetaMessage = (event: MessageEvent) => {
       // 1. Direct popup callback from whatsapp-callback.html (same-origin message)
       if (event.origin === window.location.origin && event.data?.type === 'WA_EMBEDDED_SIGNUP_AUTH_RESPONSE') {
         const { code, error } = event.data;
         if (code) {
-          console.log('[WA Embedded Signup] Auth callback received');
+          console.log('[WA EMBEDDED] Auth callback received (direct popup)');
           authCodeRef.current = code;
+          adminFetch('/api/admin/whatsapp/store-auth-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code }),
+          }).catch(() => {});
+
           if (finishReceivedRef.current && finishSessionRef.current) {
             executeBackendOnboardingRef.current(code, finishSessionRef.current);
-          } else {
-            setTimeout(() => {
-              if (!submissionTriggeredRef.current) {
-                executeBackendOnboardingRef.current(code, finishSessionRef.current || {});
-              }
-            }, 3000);
           }
         } else if (error) {
-          if (safetyTimeoutRef.current) {
-            clearTimeout(safetyTimeoutRef.current);
-            safetyTimeoutRef.current = null;
-          }
           setIsConnectingWhatsApp(false);
           setWhatsAppError(error || 'Meta authorization was cancelled or failed.');
         }
@@ -244,83 +307,103 @@ export const SettingsSection: React.FC = () => {
       }
 
       // 2. Validate event origin is from Facebook/Meta before processing it
-      if (event.origin !== 'https://www.facebook.com' && event.origin !== 'https://web.facebook.com') {
+      const isMetaOrigin = /^https:\/\/([a-zA-Z0-9-]+\.)?facebook\.com$/i.test(event.origin);
+      if (!isMetaOrigin) {
         return;
       }
 
-      console.log('[WA Embedded Signup] Session event received');
+      console.log('[WA EMBEDDED] message received');
+      console.log('[WA EMBEDDED] origin:', event.origin);
+      console.log('[WA EMBEDDED] data type:', typeof event.data);
 
-      try {
-        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-        if (!data || typeof data !== 'object') return;
-
-        const eventType = data.type || '';
-        const eventName = data.event || '';
-
-        console.log('[WA Embedded Signup] Event type:', eventType || 'unspecified');
-        console.log('[WA Embedded Signup] Event name:', eventName || 'unspecified');
-
-        if (eventType === 'WA_EMBEDDED_SIGNUP' || eventName === 'FINISH' || eventName === 'CANCEL' || eventName === 'ERROR') {
-          if (eventName === 'FINISH' || data.event === 'FINISH') {
-            console.log('[WA Embedded Signup] FINISH received');
-            const payload = data.data || data;
-            const wabaId =
-              payload.waba_id ||
-              payload.wabaId ||
-              (Array.isArray(payload.waba_ids) ? payload.waba_ids[0] : null);
-            const phoneNumberId =
-              payload.phone_number_id ||
-              payload.phoneNumberId ||
-              (Array.isArray(payload.phone_number_ids) ? payload.phone_number_ids[0] : null);
-            const businessId = payload.business_id || payload.businessId;
-
-            console.log('[WA Embedded Signup] WABA ID received:', wabaId ? 'yes' : 'no');
-            console.log('[WA Embedded Signup] Phone Number ID received:', phoneNumberId ? 'yes' : 'no');
-
-            const sessionInfo = {
-              wabaId: wabaId ? String(wabaId) : undefined,
-              phoneNumberId: phoneNumberId ? String(phoneNumberId) : undefined,
-              businessId: businessId ? String(businessId) : undefined,
-              rawData: payload,
-            };
-
-            finishSessionRef.current = sessionInfo;
-            finishReceivedRef.current = true;
-
-            if (authCodeRef.current) {
-              executeBackendOnboardingRef.current(authCodeRef.current, sessionInfo);
-            }
-          } else if (eventName === 'CANCEL' || data.event === 'CANCEL') {
-            if (safetyTimeoutRef.current) {
-              clearTimeout(safetyTimeoutRef.current);
-              safetyTimeoutRef.current = null;
-            }
-            setIsConnectingWhatsApp(false);
-            setWhatsAppError('WhatsApp onboarding was cancelled.');
-          } else if (eventName === 'ERROR' || data.event === 'ERROR') {
-            if (safetyTimeoutRef.current) {
-              clearTimeout(safetyTimeoutRef.current);
-              safetyTimeoutRef.current = null;
-            }
-            setIsConnectingWhatsApp(false);
-            const errorMsg =
-              data.data?.error_message ||
-              data.error_message ||
-              'Meta encountered an error during onboarding. Please try again.';
-            setWhatsAppError(errorMsg);
-          }
+      let parsedData: any = null;
+      if (typeof event.data === 'string') {
+        try {
+          parsedData = JSON.parse(event.data);
+        } catch {
+          // Ignore non-JSON Meta internal strings (e.g., debug/transport frames)
+          return;
         }
-      } catch {
-        // Non-JSON message from external frame, safely ignore
+      } else if (typeof event.data === 'object' && event.data !== null) {
+        parsedData = event.data;
+      } else {
+        return;
+      }
+
+      // If nested 'data' is also a JSON string, parse it safely
+      let innerData = parsedData.data;
+      if (typeof innerData === 'string') {
+        try {
+          innerData = JSON.parse(innerData);
+          parsedData = { ...parsedData, data: innerData };
+        } catch {}
+      }
+
+      const eventType = parsedData.type || parsedData.event_type || innerData?.type || '';
+      const eventName = parsedData.event || parsedData.action || innerData?.event || innerData?.action || parsedData.current_step || '';
+
+      console.log('[WA EMBEDDED] parsed event type:', eventType || 'unspecified');
+      console.log('[WA EMBEDDED] parsed event name:', eventName || 'unspecified');
+      console.log('[WA EMBEDDED] data structure:', JSON.stringify(getObjectStructure(parsedData)));
+
+      const ids = extractIdsFromPayload(parsedData);
+
+      const isFinish =
+        String(eventName).toUpperCase() === 'FINISH' ||
+        String(eventType).toUpperCase() === 'FINISH' ||
+        String(parsedData.current_step || '').toUpperCase() === 'FINISH' ||
+        Boolean(ids.wabaId && ids.phoneNumberId);
+
+      console.log('[WA EMBEDDED] FINISH detected:', isFinish ? 'yes' : 'no');
+      console.log('[WA EMBEDDED] waba_id present:', ids.wabaId ? 'yes' : 'no');
+      console.log('[WA EMBEDDED] phone_number_id present:', ids.phoneNumberId ? 'yes' : 'no');
+      console.log('[WA EMBEDDED] business_id present:', ids.businessId ? 'yes' : 'no');
+
+      if (isFinish) {
+        const sessionInfo = {
+          wabaId: ids.wabaId,
+          phoneNumberId: ids.phoneNumberId,
+          businessId: ids.businessId,
+          rawData: parsedData,
+        };
+
+        finishSessionRef.current = sessionInfo;
+        finishReceivedRef.current = true;
+
+        if (authCodeRef.current) {
+          executeBackendOnboardingRef.current(authCodeRef.current, sessionInfo);
+        } else {
+          console.log('[WA EMBEDDED] FINISH session data stored, waiting for auth response...');
+          // If FB.login callback is slightly delayed after popup closes, attempt submission
+          setTimeout(() => {
+            if (!submissionTriggeredRef.current) {
+              executeBackendOnboardingRef.current(authCodeRef.current || '', sessionInfo);
+            }
+          }, 2000);
+        }
+      } else if (
+        String(eventName).toUpperCase() === 'CANCEL' ||
+        String(eventType).toUpperCase() === 'CANCEL'
+      ) {
+        setIsConnectingWhatsApp(false);
+        setWhatsAppError('WhatsApp onboarding was cancelled.');
+      } else if (
+        String(eventName).toUpperCase() === 'ERROR' ||
+        String(eventType).toUpperCase() === 'ERROR'
+      ) {
+        setIsConnectingWhatsApp(false);
+        const errorMsg =
+          parsedData.error_message ||
+          parsedData.data?.error_message ||
+          innerData?.error_message ||
+          'Meta encountered an error during onboarding. Please try again.';
+        setWhatsAppError(errorMsg);
       }
     };
 
     window.addEventListener('message', handleMetaMessage);
     return () => {
       window.removeEventListener('message', handleMetaMessage);
-      if (safetyTimeoutRef.current) {
-        clearTimeout(safetyTimeoutRef.current);
-      }
     };
   }, []);
 
@@ -523,10 +606,6 @@ export const SettingsSection: React.FC = () => {
         );
 
         if (!popup || popup.closed || typeof popup.closed === 'undefined') {
-          if (safetyTimeoutRef.current) {
-            clearTimeout(safetyTimeoutRef.current);
-            safetyTimeoutRef.current = null;
-          }
           setIsConnectingWhatsApp(false);
           setWhatsAppError('Popup was blocked by your browser. Please allow popups for this site and click Connect again.');
           return;
@@ -538,11 +617,7 @@ export const SettingsSection: React.FC = () => {
             clearInterval(pollTimer);
             setTimeout(() => {
               setIsConnectingWhatsApp((prev) => {
-                if (prev) {
-                  if (safetyTimeoutRef.current) {
-                    clearTimeout(safetyTimeoutRef.current);
-                    safetyTimeoutRef.current = null;
-                  }
+                if (prev && !finishReceivedRef.current) {
                   return false;
                 }
                 return false;
@@ -551,10 +626,6 @@ export const SettingsSection: React.FC = () => {
           }
         }, 500);
       } catch (popupErr: any) {
-        if (safetyTimeoutRef.current) {
-          clearTimeout(safetyTimeoutRef.current);
-          safetyTimeoutRef.current = null;
-        }
         setIsConnectingWhatsApp(false);
         console.error('[WhatsApp Coexistence] Failed to open popup window:', popupErr);
         setWhatsAppError('Unable to open Meta login window. Please allow popups and try again.');
@@ -565,7 +636,7 @@ export const SettingsSection: React.FC = () => {
 
   // Launch Meta Embedded Signup for WhatsApp Business App Coexistence
   const handleConnectWhatsApp = async () => {
-    console.log('[WA Embedded Signup] Login started');
+    console.log('[WA EMBEDDED] Login started');
     setWhatsAppError(null);
     setWhatsAppSuccess(null);
 
@@ -604,18 +675,8 @@ export const SettingsSection: React.FC = () => {
 
     console.log('[WhatsApp Coexistence] FB SDK status:', isReady ? 'ready' : 'fallback_popup');
 
-    // 3. Set connecting immediately before opening flow
+    // 3. Set connecting state (Do NOT set an active-onboarding timeout while popup is open)
     setIsConnectingWhatsApp(true);
-
-    // 4. Start 30-second safety timeout so UI never remains permanently in connecting state
-    if (safetyTimeoutRef.current) {
-      clearTimeout(safetyTimeoutRef.current);
-    }
-    safetyTimeoutRef.current = setTimeout(() => {
-      console.warn('[WA Embedded Signup] Embedded Signup timed out after 30 seconds');
-      setIsConnectingWhatsApp(false);
-      setWhatsAppError('Meta connection timed out. If the popup was blocked by your browser, please allow popups and try again.');
-    }, 30000);
 
     // Pre-save draft business number in background (fire-and-forget, non-blocking)
     adminFetch('/api/admin/whatsapp/business-number', {
@@ -638,41 +699,39 @@ export const SettingsSection: React.FC = () => {
       try {
         window.FB.login(
           (response: any) => {
-            console.log('[WA Embedded Signup] Auth callback received');
+            console.log('[WA EMBEDDED] Auth callback received');
 
             if (response && response.authResponse && response.authResponse.code) {
-              authCodeRef.current = response.authResponse.code;
+              const code = response.authResponse.code;
+              authCodeRef.current = code;
+
+              // Cache authorization code on backend temporarily
+              adminFetch('/api/admin/whatsapp/store-auth-code', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code }),
+              }).catch((err) => {
+                console.warn('[WA EMBEDDED] Notice: could not pre-cache auth code:', err);
+              });
 
               if (finishReceivedRef.current && finishSessionRef.current) {
-                executeBackendOnboardingRef.current(authCodeRef.current, finishSessionRef.current);
+                // If FINISH event was already received with IDs, execute onboarding immediately
+                executeBackendOnboardingRef.current(code, finishSessionRef.current);
               } else {
-                // Wait for Meta Embedded Signup window message event to arrive
-                setTimeout(() => {
-                  if (!submissionTriggeredRef.current) {
-                    if (finishReceivedRef.current && finishSessionRef.current) {
-                      executeBackendOnboardingRef.current(authCodeRef.current!, finishSessionRef.current);
-                    } else {
-                      console.warn('[WA Embedded Signup] FINISH event not received before timeout; submitting for validation');
-                      executeBackendOnboardingRef.current(authCodeRef.current!, finishSessionRef.current || {});
-                    }
-                  }
-                }, 3500);
+                // Keep auth code ready and wait for user to click Meta's blue Finish button
+                console.log('[WA EMBEDDED] Auth code stored, waiting for Embedded Signup FINISH event...');
               }
             } else {
-              if (safetyTimeoutRef.current) {
-                clearTimeout(safetyTimeoutRef.current);
-                safetyTimeoutRef.current = null;
-              }
               if (!finishReceivedRef.current) {
+                setIsConnectingWhatsApp(false);
                 if (response?.status === 'unknown') {
-                  setWhatsAppError('WhatsApp connection window was closed or cancelled.');
+                  setWhatsAppError('WhatsApp connection window was closed.');
                 } else {
                   setWhatsAppError(
                     response?.error_message ||
                       'Could not obtain authorization code from Meta. Please retry.'
                   );
                 }
-                setIsConnectingWhatsApp(false);
               }
             }
           },

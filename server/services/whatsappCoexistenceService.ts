@@ -313,11 +313,41 @@ class WhatsAppCoexistenceService {
 
     // Inspect session_data for extracted fields if top-level parameters were omitted
     if (session_data && typeof session_data === 'object') {
-      resolvedWabaId = resolvedWabaId || session_data.waba_id || session_data.wabaId || '';
-      resolvedPhoneNumberId = resolvedPhoneNumberId || session_data.phone_number_id || session_data.phoneNumberId || '';
-      resolvedBusinessId = resolvedBusinessId || session_data.business_id || session_data.businessId || '';
-      if (session_data.display_phone_number || session_data.displayPhoneNumber) {
-        displayPhoneNumber = session_data.display_phone_number || session_data.displayPhoneNumber;
+      const queue: any[] = [session_data];
+      const visited = new Set();
+      while (queue.length > 0) {
+        const cur = queue.shift();
+        if (!cur || typeof cur !== 'object' || visited.has(cur)) continue;
+        visited.add(cur);
+
+        if (!resolvedWabaId) {
+          if (cur.waba_id) resolvedWabaId = String(cur.waba_id);
+          else if (cur.wabaId) resolvedWabaId = String(cur.wabaId);
+          else if (cur.whatsapp_business_account_id) resolvedWabaId = String(cur.whatsapp_business_account_id);
+          else if (cur.messaging_account_id) resolvedWabaId = String(cur.messaging_account_id);
+          else if (Array.isArray(cur.waba_ids) && cur.waba_ids.length > 0) resolvedWabaId = String(cur.waba_ids[0]);
+        }
+
+        if (!resolvedPhoneNumberId) {
+          if (cur.phone_number_id) resolvedPhoneNumberId = String(cur.phone_number_id);
+          else if (cur.phoneNumberId) resolvedPhoneNumberId = String(cur.phoneNumberId);
+          else if (Array.isArray(cur.phone_number_ids) && cur.phone_number_ids.length > 0) resolvedPhoneNumberId = String(cur.phone_number_ids[0]);
+        }
+
+        if (!resolvedBusinessId) {
+          if (cur.business_id) resolvedBusinessId = String(cur.business_id);
+          else if (cur.businessId) resolvedBusinessId = String(cur.businessId);
+        }
+
+        if (!displayPhoneNumber && (cur.display_phone_number || cur.displayPhoneNumber)) {
+          displayPhoneNumber = cur.display_phone_number || cur.displayPhoneNumber;
+        }
+
+        for (const k of Object.keys(cur)) {
+          if (cur[k] && typeof cur[k] === 'object') {
+            queue.push(cur[k]);
+          }
+        }
       }
     }
 

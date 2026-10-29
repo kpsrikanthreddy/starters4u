@@ -1341,6 +1341,30 @@ export function createApp(): express.Application {
     }
   );
 
+  // Temporary server-side store for pending Meta authorization codes during Embedded Signup flow
+  const pendingWhatsAppAuthCodes = new Map<string, { code: string; receivedAt: number }>();
+
+  app.post(
+    '/api/admin/whatsapp/store-auth-code',
+    requireAuth,
+    requireRestaurantTenant,
+    requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER', 'RESTAURANT_ADMIN']),
+    async (req, res) => {
+      try {
+        const restaurantId = req.tenant.restaurantId;
+        const { code } = req.body;
+        if (!code) {
+          return res.status(400).json({ error: 'Authorization code is required' });
+        }
+        pendingWhatsAppAuthCodes.set(restaurantId, { code, receivedAt: Date.now() });
+        console.info(`[WA EMBEDDED] Cached auth code server-side for restaurant ${restaurantId}`);
+        res.json({ success: true, message: 'Authorization code cached successfully' });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+
   app.post(
     '/api/admin/whatsapp/onboard-coexistence',
     requireAuth,
@@ -1363,9 +1387,20 @@ export function createApp(): express.Application {
           phoneNumber,
         } = req.body;
 
-        if (!code) {
+        let effectiveCode = code;
+        if (!effectiveCode) {
+          const cached = pendingWhatsAppAuthCodes.get(restaurantId);
+          if (cached && Date.now() - cached.receivedAt < 15 * 60 * 1000) {
+            effectiveCode = cached.code;
+          }
+        }
+
+        if (!effectiveCode) {
           return res.status(400).json({ error: 'Authorization code from Meta is required' });
         }
+
+        // Clean up cached code
+        pendingWhatsAppAuthCodes.delete(restaurantId);
 
         const enteredNumber = whatsapp_business_number || whatsappBusinessNumber || phoneNumber;
 
