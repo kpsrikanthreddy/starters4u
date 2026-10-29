@@ -579,11 +579,18 @@ export const SettingsSection: React.FC = () => {
     (configId: string, appId: string, cleanNumber: string) => {
       try {
         const redirectUri = window.location.origin + '/whatsapp-callback.html';
-        const extras = JSON.stringify({
+        const extrasObj = {
           setup: {},
           featureType: 'whatsapp_business_app_onboarding',
           sessionInfoVersion: '3',
-        });
+        };
+        const extras = JSON.stringify(extrasObj);
+
+        // Confirm in console, without logging secrets
+        console.log('[WA CONFIG] config_id = ' + configId);
+        console.log('[WA CONFIG] response_type = code');
+        console.log('[WA CONFIG] featureType = ' + extrasObj.featureType);
+        console.log('[WA CONFIG] sessionInfoVersion = ' + extrasObj.sessionInfoVersion);
         const popupUrl =
           `https://www.facebook.com/v21.0/dialog/oauth?` +
           `client_id=${encodeURIComponent(appId)}&` +
@@ -691,8 +698,28 @@ export const SettingsSection: React.FC = () => {
       console.warn('[WhatsApp Coexistence] Background draft number save notice:', err?.message || err);
     });
 
-    const configId = whatsAppConfig?.configId || '1869728914394014';
+    const configId = '1869728914394014';
     const metaAppId = whatsAppConfig?.appId || '1928586071146037';
+    const responseType = 'code';
+    const featureType = 'whatsapp_business_app_onboarding';
+    const sessionInfoVersion = '3';
+
+    const fbLoginOptions = {
+      config_id: configId,
+      response_type: responseType,
+      override_default_response_type: true,
+      extras: {
+        setup: {},
+        featureType: featureType,
+        sessionInfoVersion: sessionInfoVersion,
+      },
+    };
+
+    // Confirm in console, without logging secrets
+    console.log('[WA CONFIG] config_id = ' + fbLoginOptions.config_id);
+    console.log('[WA CONFIG] response_type = ' + fbLoginOptions.response_type);
+    console.log('[WA CONFIG] featureType = ' + fbLoginOptions.extras.featureType);
+    console.log('[WA CONFIG] sessionInfoVersion = ' + fbLoginOptions.extras.sessionInfoVersion);
 
     // If FB SDK is available, use FB.login with standard config
     if (isReady && window.FB && typeof window.FB.login === 'function') {
@@ -735,16 +762,7 @@ export const SettingsSection: React.FC = () => {
               }
             }
           },
-          {
-            config_id: configId,
-            response_type: 'code',
-            override_default_response_type: true,
-            extras: {
-              setup: {},
-              featureType: 'whatsapp_business_app_onboarding',
-              sessionInfoVersion: '3',
-            },
-          }
+          fbLoginOptions
         );
       } catch (launchErr: any) {
         console.warn('[WhatsApp Coexistence] FB.login exception, launching direct popup fallback:', launchErr);
