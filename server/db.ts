@@ -128,6 +128,9 @@ export interface InMemoryDbState {
   inventory_transactions?: any[];
   customer_feedback_requests?: any[];
   restaurant_whatsapp_integrations?: any[];
+  smav_identity_links?: any[];
+  smav_sync_jobs?: any[];
+  smav_webhook_events?: any[];
 }
 
 export const inMemoryDb: InMemoryDbState = {
@@ -641,6 +644,9 @@ export const inMemoryDb: InMemoryDbState = {
   payment_attempts: [] as any[],
   customer_feedback_requests: [] as any[],
   restaurant_whatsapp_integrations: [] as any[],
+  smav_identity_links: [] as any[],
+  smav_sync_jobs: [] as any[],
+  smav_webhook_events: [] as any[],
   platform_pricing_config: [
     {
       id: 'default',
@@ -896,6 +902,7 @@ export async function initializeDatabase(): Promise<{ success: boolean; mode: st
           'migrations/011_feedback_workflow_and_owner_alerts.sql',
           'migrations/012_restaurant_whatsapp_coexistence.sql',
           'migrations/013_whatsapp_business_number.sql',
+          'migrations/014_smav_sync_reliability.sql',
         ];
 
         for (const relMig of migrationFiles) {

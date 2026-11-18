@@ -336,29 +336,104 @@ export async function getTenantUsers(restaurantId: string) {
     }));
 }
 
+export async function getTenantUserById(restaurantId: string, userId: string) {
+  if (isPostgresRunning()) {
+    try {
+      const res = await query(
+        `SELECT u.id, u.restaurant_id, u.branch_id, u.name, u.email, u.phone, u.role, u.is_active, u.created_at, u.updated_at, b.name as branch_name
+         FROM restaurant_users u
+         LEFT JOIN restaurant_branches b ON u.branch_id = b.id
+         WHERE u.id = $1 AND u.restaurant_id = $2
+         LIMIT 1`,
+        [userId, restaurantId]
+      );
+      return res.rows[0] || null;
+    } catch (err: any) {
+      console.error('[AdminService] Error getting user by ID in PG:', err.message);
+    }
+  }
+
+  const u = inMemoryDb.restaurant_users.find(
+    (item) => String(item.id) === String(userId) && item.restaurant_id === restaurantId
+  );
+  if (!u) return null;
+  return {
+    id: u.id,
+    restaurant_id: u.restaurant_id,
+    branch_id: u.branch_id,
+    name: u.name,
+    email: u.email,
+    phone: u.phone,
+    role: u.role,
+    is_active: u.is_active,
+    created_at: u.created_at,
+    updated_at: u.updated_at,
+  };
+}
+
+export async function getTenantUserByEmail(restaurantId: string, email: string) {
+  const normalized = (email || '').trim().toLowerCase();
+  if (!normalized) return null;
+
+  if (isPostgresRunning()) {
+    try {
+      const res = await query(
+        `SELECT u.id, u.restaurant_id, u.branch_id, u.name, u.email, u.phone, u.role, u.is_active, u.created_at, u.updated_at
+         FROM restaurant_users u
+         WHERE u.restaurant_id = $1 AND LOWER(u.email) = $2
+         LIMIT 1`,
+        [restaurantId, normalized]
+      );
+      return res.rows[0] || null;
+    } catch (err: any) {
+      console.error('[AdminService] Error getting user by email in PG:', err.message);
+    }
+  }
+
+  const u = inMemoryDb.restaurant_users.find(
+    (item) => item.restaurant_id === restaurantId && String(item.email || '').trim().toLowerCase() === normalized
+  );
+  if (!u) return null;
+  return {
+    id: u.id,
+    restaurant_id: u.restaurant_id,
+    branch_id: u.branch_id,
+    name: u.name,
+    email: u.email,
+    phone: u.phone,
+    role: u.role,
+    is_active: u.is_active,
+    created_at: u.created_at,
+    updated_at: u.updated_at,
+  };
+}
+
 export async function createTenantUser(
   restaurantId: string,
-  data: { name: string; email: string; phone?: string; role: string; pin: string; branchId?: string }
+  data: { id?: string; name: string; email: string; phone?: string; role: string; pin: string; branchId?: string; isActive?: boolean }
 ) {
   const hashed = await hashPassword(data.pin, 12);
-  const id = crypto.randomUUID();
+  const id = data.id || crypto.randomUUID();
+  const isActive = data.isActive !== undefined ? Boolean(data.isActive) : true;
+  const normalizedEmail = data.email.trim().toLowerCase();
 
   if (isPostgresRunning()) {
     try {
       const sql = `
         INSERT INTO restaurant_users (id, restaurant_id, branch_id, name, email, phone, role, pin_hash, is_active, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
         RETURNING id, restaurant_id, branch_id, name, email, phone, role, is_active, created_at;
       `;
       const res = await query(sql, [
         id,
         restaurantId,
         data.branchId || null,
-        data.name,
-        data.email.toLowerCase(),
+        data.name.trim(),
+        normalizedEmail,
         data.phone || null,
         data.role,
         hashed,
+        isActive,
       ]);
       return res.rows[0];
     } catch (err: any) {
@@ -371,12 +446,12 @@ export async function createTenantUser(
     id,
     restaurant_id: restaurantId,
     branch_id: data.branchId || null,
-    name: data.name,
-    email: data.email.toLowerCase(),
+    name: data.name.trim(),
+    email: normalizedEmail,
     phone: data.phone || null,
     role: data.role,
     pin_hash: hashed,
-    is_active: true,
+    is_active: isActive,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -397,8 +472,29 @@ export async function createTenantUser(
 export async function updateTenantUser(
   restaurantId: string,
   userId: string,
-  updates: { name?: string; phone?: string; role?: string; pin?: string; branchId?: string; isActive?: boolean }
+  updates: {
+    name?: string;
+    email?: string;
+    phone?: string;
+    role?: string;
+    pin?: string;
+    password?: string;
+    branchId?: string;
+    branch_id?: string;
+    isActive?: boolean;
+    is_active?: boolean;
+    active?: boolean;
+  }
 ) {
+  const effectiveBranchId = updates.branchId !== undefined ? updates.branchId : updates.branch_id;
+  const effectiveIsActive =
+    updates.isActive !== undefined
+      ? updates.isActive
+      : updates.is_active !== undefined
+      ? updates.is_active
+      : updates.active;
+  const effectiveCredential = updates.pin?.trim() || updates.password?.trim();
+
   if (isPostgresRunning()) {
     try {
       const fields: string[] = [];
@@ -407,7 +503,11 @@ export async function updateTenantUser(
 
       if (updates.name !== undefined) {
         fields.push(`name = $${idx++}`);
-        values.push(updates.name);
+        values.push(updates.name.trim());
+      }
+      if (updates.email !== undefined) {
+        fields.push(`email = $${idx++}`);
+        values.push(updates.email.trim().toLowerCase());
       }
       if (updates.phone !== undefined) {
         fields.push(`phone = $${idx++}`);
@@ -417,16 +517,16 @@ export async function updateTenantUser(
         fields.push(`role = $${idx++}`);
         values.push(updates.role);
       }
-      if (updates.branchId !== undefined) {
+      if (effectiveBranchId !== undefined) {
         fields.push(`branch_id = $${idx++}`);
-        values.push(updates.branchId || null);
+        values.push(effectiveBranchId || null);
       }
-      if (updates.isActive !== undefined) {
+      if (effectiveIsActive !== undefined) {
         fields.push(`is_active = $${idx++}`);
-        values.push(Boolean(updates.isActive));
+        values.push(Boolean(effectiveIsActive));
       }
-      if (updates.pin) {
-        const hashed = await hashPassword(updates.pin, 12);
+      if (effectiveCredential) {
+        const hashed = await hashPassword(effectiveCredential, 12);
         fields.push(`pin_hash = $${idx++}`);
         values.push(hashed);
       }
@@ -437,7 +537,7 @@ export async function updateTenantUser(
       values.push(userId);
       values.push(restaurantId);
 
-      const sql = `UPDATE restaurant_users SET ${fields.join(', ')} WHERE id = $${idx++} AND restaurant_id = $${idx} RETURNING id, restaurant_id, branch_id, name, email, phone, role, is_active, created_at`;
+      const sql = `UPDATE restaurant_users SET ${fields.join(', ')} WHERE id = $${idx++} AND restaurant_id = $${idx} RETURNING id, restaurant_id, branch_id, name, email, phone, role, is_active, created_at, updated_at`;
       const res = await query(sql, values);
       return res.rows[0] || null;
     } catch (err: any) {
@@ -447,19 +547,36 @@ export async function updateTenantUser(
   }
 
   const idx = inMemoryDb.restaurant_users.findIndex(
-    (u) => u.id === userId && u.restaurant_id === restaurantId
+    (u) => String(u.id) === String(userId) && u.restaurant_id === restaurantId
   );
   if (idx !== -1) {
     const curr = inMemoryDb.restaurant_users[idx];
+    const hashed = effectiveCredential ? await hashPassword(effectiveCredential, 10) : curr.pin_hash;
+    const now = new Date().toISOString();
     inMemoryDb.restaurant_users[idx] = {
       ...curr,
-      name: updates.name !== undefined ? updates.name : curr.name,
+      name: updates.name !== undefined ? updates.name.trim() : curr.name,
+      email: updates.email !== undefined ? updates.email.trim().toLowerCase() : curr.email,
       phone: updates.phone !== undefined ? updates.phone : curr.phone,
       role: updates.role !== undefined ? updates.role : curr.role,
-      branch_id: updates.branchId !== undefined ? updates.branchId : curr.branch_id,
-      is_active: updates.isActive !== undefined ? Boolean(updates.isActive) : curr.is_active,
+      branch_id: effectiveBranchId !== undefined ? (effectiveBranchId || null) : curr.branch_id,
+      is_active: effectiveIsActive !== undefined ? Boolean(effectiveIsActive) : curr.is_active,
+      pin_hash: hashed,
+      updated_at: now,
     };
-    return inMemoryDb.restaurant_users[idx];
+    const updated = inMemoryDb.restaurant_users[idx];
+    return {
+      id: updated.id,
+      restaurant_id: updated.restaurant_id,
+      branch_id: updated.branch_id,
+      name: updated.name,
+      email: updated.email,
+      phone: updated.phone,
+      role: updated.role,
+      is_active: updated.is_active,
+      created_at: updated.created_at,
+      updated_at: updated.updated_at,
+    };
   }
   return null;
 }
@@ -479,7 +596,7 @@ export async function deleteTenantUser(restaurantId: string, userId: string) {
   }
 
   const idx = inMemoryDb.restaurant_users.findIndex(
-    (u) => u.id === userId && u.restaurant_id === restaurantId
+    (u) => String(u.id) === String(userId) && u.restaurant_id === restaurantId
   );
   if (idx !== -1) {
     inMemoryDb.restaurant_users.splice(idx, 1);

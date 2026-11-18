@@ -42,6 +42,15 @@ import {
   handleWhatsAppWebhookEvent,
 } from './services/whatsappWebhookService.js';
 import { whatsappCoexistenceService } from './services/whatsappCoexistenceService.js';
+import {
+  syncUserWithSmavRetry,
+  processPendingSmavSyncJobs,
+  getSmavSyncStatus,
+  resolveSmavOutletCode,
+  isPlatformAdminRole,
+  verifySmavWebhookAuth,
+  handleSmavWebhook,
+} from './services/smavIntegrationService.js';
 
 dotenv.config();
 
@@ -104,6 +113,76 @@ export async function ensureInitialized(): Promise<void> {
 
 export function createApp(): express.Application {
   const app = express();
+
+
+// SMAV sale event signature. The sender signs `${timestamp}.${raw JSON body}`.
+function verifySmavSaleEvent(req: express.Request): boolean {
+  const secret = (process.env.SMAV_DISPATCH_SECRET || '').trim();
+  const ts = String(req.headers['x-smav-timestamp'] || '');
+  const supplied = String(req.headers['x-smav-signature'] || '');
+  if (secret.length < 32 || !/^\d{10}$/.test(ts) || !/^[a-f0-9]{64}$/i.test(supplied)) return false;
+  if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false;
+  const raw = (req as any).rawBody;
+  if (!raw) return false;
+  const expected = crypto.createHmac('sha256', secret).update(`${ts}.${Buffer.isBuffer(raw) ? raw.toString('utf8') : raw}`).digest('hex');
+  return crypto.timingSafeEqual(Buffer.from(supplied, 'hex'), Buffer.from(expected, 'hex'));
+}
+
+
+  app.post('/api/integrations/smav/sale-event', async (req,res) => {
+    if (!verifySmavSaleEvent(req)) return res.status(401).json({error:'Invalid SMAV signature'});
+    const e=req.body||{}, p=e.payload||{};
+    if(e.source_type!=='restaurant'||!['receipt','feedback'].includes(e.event_type)||!String(e.source_key||'').trim()) return res.status(400).json({error:'Invalid event'});
+    if(!process.env.SMAV_MOZZ_OUTLET_ID || e.outlet_id!==process.env.SMAV_MOZZ_OUTLET_ID) return res.status(403).json({error:'Outlet not allowed'});
+    if(!isPostgresConfigured()) return res.status(503).json({error:'PostgreSQL required for durable SMAV integration'});
+    const restaurantId=process.env.SMAV_MOZZ_RESTAURANT_ID, branchId=process.env.SMAV_MOZZ_BRANCH_ID;
+    if(!restaurantId||!branchId) return res.status(503).json({error:'Restaurant/branch mapping missing'});
+    const sourceKey=String(e.source_key), number=String(p.bill_number||'');
+    if(!number) return res.status(400).json({error:'Bill number required'});
+    try {
+      // Atomic sale and items write; no extra KOT/print job is created for an already printed SMAV bill.
+      const {getDbPool}=await import('./db.js');
+      const client=await getDbPool()!.connect();
+      let orderId='';
+      try {
+        await client.query('BEGIN');
+        const existing=await client.query('SELECT * FROM smav_inbound_sales WHERE source_key=$1 FOR UPDATE',[sourceKey]);
+        if(!existing.rows.length) {
+          if(e.event_type==='feedback') {await client.query('ROLLBACK');return res.status(409).json({error:'Receipt reconciliation required first'});}
+          const items=Array.isArray(p.items)?p.items:[];
+          if(!items.length) {await client.query('ROLLBACK');return res.status(422).json({error:'Items required'});}
+          const total=Number(p.grand_total);
+          if(!Number.isFinite(total)||total<0) {await client.query('ROLLBACK');return res.status(422).json({error:'Invalid total'});}
+          const kind=['delivery','takeaway','dine_in','counter'].includes(p.order_type)?p.order_type:'counter';
+          const mode=String(p.payment_mode||'cash');
+          const ins=await client.query(`INSERT INTO orders (order_number,restaurant_id,branch_id,order_type,entry_source,status,payment_method,payment_status,item_total,tax,grand_total,customer_snapshot,created_at)
+            VALUES ($1,$2,$3,$4,'pos_counter','completed',$5,'paid',$6,0,$6,$7,$8)
+            ON CONFLICT (restaurant_id,order_number) DO NOTHING RETURNING id`,[number,restaurantId,branchId,kind,mode,total,JSON.stringify({name:p.customer_name||'',phone:p.customer_phone||''}),p.billed_at||new Date().toISOString()]);
+          if(!ins.rows.length) {await client.query('ROLLBACK');return res.status(409).json({error:'Order number already exists; manual reconciliation required'});}
+          orderId=ins.rows[0].id;
+          for(const i of items) {
+            const quantity=Math.max(1,Number(i.quantity||1));
+            const unit=Number(i.unit_price??i.unitPrice??i.price??0);
+            if(!Number.isFinite(quantity)||!Number.isFinite(unit)) throw new Error('Invalid item price');
+            await client.query('INSERT INTO order_items(order_id,restaurant_id,item_name,quantity,unit_price) VALUES($1,$2,$3,$4,$5)',[orderId,restaurantId,String(i.item_name||i.itemName||i.name||'Item'),quantity,unit]);
+          }
+          await client.query('INSERT INTO smav_inbound_sales(source_key,outlet_id,restaurant_id,branch_id,native_order_id,bill_number) VALUES($1,$2,$3,$4,$5,$6)',[sourceKey,e.outlet_id,restaurantId,branchId,orderId,number]);
+        } else orderId=existing.rows[0].native_order_id;
+        await client.query('COMMIT');
+      }catch(err){await client.query('ROLLBACK');throw err;}finally{client.release();}
+      if(e.event_type==='receipt') {
+        // Existing MOZZ code has feedback template, not a verified SMAV bill-receipt template.
+        // Persist sale; do not invent a Meta template or send the feedback template as a receipt.
+        return res.json({accepted:true,native_order_id:orderId,receipt_status:'not_configured'});
+      }
+      const claim=await query(`UPDATE smav_inbound_sales SET feedback_claimed_at=now() WHERE source_key=$1 AND feedback_claimed_at IS NULL AND feedback_sent_at IS NULL RETURNING native_order_id`,[sourceKey]);
+      if(!claim.rows.length) return res.status(409).json({error:'Feedback already claimed or sent'});
+      const result=await sendOrderFeedback(orderId,true,restaurantId);
+      if(!result.success && result.status!=='SKIPPED') return res.status(503).json({error:'WhatsApp feedback failed; review before retry'});
+      await query('UPDATE smav_inbound_sales SET feedback_sent_at=now() WHERE source_key=$1',[sourceKey]);
+      return res.json({accepted:true,native_order_id:orderId,feedback_status:result.status});
+    }catch(err:any){return res.status(503).json({error:String(err.message||err).slice(0,300)});}
+  });
 
   // Enable trust proxy for secure, accurate client IP handling behind reverse proxies (Vercel, Cloud Run, Nginx)
   app.set('trust proxy', 1);
@@ -1471,53 +1550,271 @@ export function createApp(): express.Application {
     }
   });
 
-  app.get('/api/admin/users', requireAuth, requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER', 'BRANCH_MANAGER']), async (req, res) => {
+  app.get('/api/admin/users', requireAuth, requireRestaurantTenant, requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER', 'BRANCH_MANAGER']), async (req, res) => {
     try {
-      const restaurantId = req.user!.restaurantId;
-      const users = await adminService.getTenantUsers(restaurantId);
+      const targetRestaurantId =
+        isPlatformAdminRole(req.user?.role) && ((req.query.restaurantId as string) || (req.query.restaurant_id as string))
+          ? ((req.query.restaurantId as string) || (req.query.restaurant_id as string))
+          : req.tenant!.restaurantId;
+      const users = await adminService.getTenantUsers(targetRestaurantId);
       res.json(users);
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to fetch users', details: err.message });
     }
   });
 
-  app.post('/api/admin/users', requireAuth, requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER']), async (req, res) => {
+  app.post('/api/admin/users', requireAuth, requireRestaurantTenant, requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER']), async (req, res) => {
     try {
-      const restaurantId = req.user!.restaurantId;
-      const { name, email, phone, role, pin, branchId } = req.body;
-      if (!name || !email || !pin || !role) {
+      const targetRestaurantId =
+        isPlatformAdminRole(req.user?.role) && (req.body?.restaurantId || req.body?.restaurant_id || req.query.restaurantId)
+          ? String(req.body?.restaurantId || req.body?.restaurant_id || req.query.restaurantId)
+          : req.tenant!.restaurantId;
+
+      const { name, email, phone, role, pin, password, branchId, branch_id, isActive, is_active } = req.body;
+      const effectivePin = String(pin || password || '').trim();
+      const effectiveBranchId = branchId ?? branch_id;
+      const effectiveIsActive = isActive !== undefined ? Boolean(isActive) : is_active !== undefined ? Boolean(is_active) : true;
+
+      if (!name || !email || !effectivePin || !role) {
         return res.status(400).json({ error: 'Name, email, role, and PIN are required' });
       }
-      const user = await adminService.createTenantUser(restaurantId, { name, email, phone, role, pin, branchId });
-      res.status(201).json(user);
+
+      if (isPlatformAdminRole(role) && !isPlatformAdminRole(req.user?.role)) {
+        return res.status(403).json({ error: 'Forbidden', message: 'Only a Platform Super Admin can create Super Admin accounts.' });
+      }
+
+      if (effectiveBranchId) {
+        const branches = await adminService.getTenantBranches(targetRestaurantId);
+        if (!branches.some((b: any) => String(b.id) === String(effectiveBranchId))) {
+          return res.status(400).json({ error: 'Invalid branchId for this restaurant' });
+        }
+      }
+
+      const user = await adminService.createTenantUser(targetRestaurantId, {
+        name,
+        email,
+        phone,
+        role,
+        pin: effectivePin,
+        branchId: effectiveBranchId,
+        isActive: effectiveIsActive,
+      });
+
+      const outletCode = await resolveSmavOutletCode(targetRestaurantId);
+      let smavSync: any = null;
+      if (outletCode && !isPlatformAdminRole(user.role)) {
+        const smavPassword =
+          password !== undefined
+            ? String(password)
+            : effectivePin.length >= 8
+            ? effectivePin
+            : undefined;
+        smavSync = await syncUserWithSmavRetry({
+          restaurantId: targetRestaurantId,
+          outletCode,
+          action: user.is_active ? 'UPSERT' : 'DISABLE',
+          staff: {
+            sourceId: String(user.id),
+            email: user.email,
+            name: user.name,
+            phone: user.phone || undefined,
+            role: user.role,
+            active: Boolean(user.is_active),
+            ...(smavPassword !== undefined ? { password: smavPassword } : {}),
+          },
+        });
+      } else if (isPlatformAdminRole(user.role)) {
+        smavSync = { synced: false, skipped: true, reason: 'SUPERADMIN preserved locally' };
+      }
+
+      res.status(201).json({ ...user, smavSync });
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to create user', details: err.message });
     }
   });
 
-  app.patch('/api/admin/users/:id', requireAuth, requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER']), async (req, res) => {
+  app.patch('/api/admin/users/:id', requireAuth, requireRestaurantTenant, requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER']), async (req, res) => {
     try {
-      const restaurantId = req.user!.restaurantId;
-      const updated = await adminService.updateTenantUser(restaurantId, req.params.id, req.body);
-      if (!updated) {
+      const targetRestaurantId =
+        isPlatformAdminRole(req.user?.role) && (req.body?.restaurantId || req.body?.restaurant_id || req.query.restaurantId)
+          ? String(req.body?.restaurantId || req.body?.restaurant_id || req.query.restaurantId)
+          : req.tenant!.restaurantId;
+
+      const existing = await adminService.getTenantUserById(targetRestaurantId, req.params.id);
+      if (!existing) {
         return res.status(404).json({ error: 'User not found' });
       }
-      res.json(updated);
+
+      if (isPlatformAdminRole(existing.role) && !isPlatformAdminRole(req.user?.role)) {
+        return res.status(403).json({ error: 'Forbidden', message: 'Only a Platform Super Admin can modify a Super Admin account.' });
+      }
+
+      if (req.body?.role && isPlatformAdminRole(req.body.role) && !isPlatformAdminRole(req.user?.role)) {
+        return res.status(403).json({ error: 'Forbidden', message: 'Only a Platform Super Admin can assign Super Admin privileges.' });
+      }
+
+      const effectiveBranchId = req.body?.branchId !== undefined ? req.body.branchId : req.body?.branch_id;
+      if (effectiveBranchId) {
+        const branches = await adminService.getTenantBranches(targetRestaurantId);
+        if (!branches.some((b: any) => String(b.id) === String(effectiveBranchId))) {
+          return res.status(400).json({ error: 'Invalid branchId for this restaurant' });
+        }
+      }
+
+      const updated = await adminService.updateTenantUser(targetRestaurantId, req.params.id, req.body);
+      if (!updated) {
+        return res.status(400).json({ error: 'No valid fields provided for update' });
+      }
+
+      const outletCode = await resolveSmavOutletCode(targetRestaurantId);
+      let smavSync: any = null;
+      if (outletCode && !isPlatformAdminRole(existing.role) && !isPlatformAdminRole(updated.role)) {
+        const smavPassword =
+          req.body?.password !== undefined
+            ? String(req.body.password)
+            : req.body?.pin && String(req.body.pin).trim().length >= 8
+            ? String(req.body.pin).trim()
+            : undefined;
+        smavSync = await syncUserWithSmavRetry({
+          restaurantId: targetRestaurantId,
+          outletCode,
+          action: updated.is_active ? 'UPSERT' : 'DISABLE',
+          staff: {
+            sourceId: String(updated.id),
+            email: updated.email,
+            name: updated.name,
+            phone: updated.phone || undefined,
+            role: updated.role,
+            active: Boolean(updated.is_active),
+            ...(smavPassword !== undefined ? { password: smavPassword } : {}),
+          },
+        });
+      } else if (isPlatformAdminRole(existing.role) || isPlatformAdminRole(updated.role)) {
+        smavSync = { synced: false, skipped: true, reason: 'SUPERADMIN preserved locally' };
+      }
+
+      res.json({ ...updated, smavSync });
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to update user', details: err.message });
     }
   });
 
-  app.delete('/api/admin/users/:id', requireAuth, requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER']), async (req, res) => {
+  app.delete('/api/admin/users/:id', requireAuth, requireRestaurantTenant, requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER']), async (req, res) => {
     try {
-      const restaurantId = req.user!.restaurantId;
-      const success = await adminService.deleteTenantUser(restaurantId, req.params.id);
+      const targetRestaurantId =
+        isPlatformAdminRole(req.user?.role) && ((req.query.restaurantId as string) || (req.query.restaurant_id as string))
+          ? ((req.query.restaurantId as string) || (req.query.restaurant_id as string))
+          : req.tenant!.restaurantId;
+
+      const before = await adminService.getTenantUserById(targetRestaurantId, req.params.id);
+      if (!before) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      if (isPlatformAdminRole(before.role) && !isPlatformAdminRole(req.user?.role)) {
+        return res.status(403).json({ error: 'Forbidden', message: 'Only a Platform Super Admin can remove a Super Admin account.' });
+      }
+
+      if (String(before.id) === String(req.user!.userId)) {
+        return res.status(400).json({ error: 'You cannot delete your own active admin account.' });
+      }
+
+      const success = await adminService.deleteTenantUser(targetRestaurantId, req.params.id);
       if (!success) {
         return res.status(404).json({ error: 'User not found' });
       }
-      res.json({ success: true, message: 'User removed successfully' });
+
+      const outletCode = await resolveSmavOutletCode(targetRestaurantId);
+      let smavSync: any = null;
+      if (outletCode && !isPlatformAdminRole(before.role)) {
+        smavSync = await syncUserWithSmavRetry({
+          restaurantId: targetRestaurantId,
+          outletCode,
+          action: 'DISABLE',
+          staff: {
+            sourceId: String(before.id),
+            email: before.email,
+            name: before.name,
+            phone: before.phone || undefined,
+            role: before.role,
+            active: false,
+          },
+        });
+      }
+
+      res.json({ success: true, smavSync, message: 'User removed locally; inspect smavSync for central status.' });
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to delete user', details: err.message });
+    }
+  });
+
+  app.get('/api/admin/users/sync-smav/status', requireAuth, requireRestaurantTenant, requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER']), async (req, res) => {
+    try {
+      const targetRestaurantId =
+        isPlatformAdminRole(req.user?.role) && ((req.query.restaurantId as string) || (req.query.restaurant_id as string))
+          ? ((req.query.restaurantId as string) || (req.query.restaurant_id as string))
+          : req.tenant!.restaurantId;
+      const status = await getSmavSyncStatus(targetRestaurantId);
+      res.json(status);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to inspect SMAV sync status', details: err.message });
+    }
+  });
+
+  app.post('/api/admin/users/sync-smav/retry', requireAuth, requireRestaurantTenant, requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER']), async (req, res) => {
+    try {
+      const targetRestaurantId =
+        isPlatformAdminRole(req.user?.role) && (req.body?.restaurantId || req.body?.restaurant_id || req.query.restaurantId)
+          ? String(req.body?.restaurantId || req.body?.restaurant_id || req.query.restaurantId)
+          : req.tenant!.restaurantId;
+      const summary = await processPendingSmavSyncJobs({
+        restaurantId: targetRestaurantId,
+        forceImmediate: req.body?.force !== false,
+      });
+      res.json({ success: true, ...summary });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to process SMAV retry queue', details: err.message });
+    }
+  });
+
+  app.post('/api/admin/users/sync-smav', requireAuth, requireRestaurantTenant, requireRole(['SUPER_ADMIN', 'RESTAURANT_OWNER']), async (req, res) => {
+    try {
+      const targetRestaurantId =
+        isPlatformAdminRole(req.user?.role) && (req.body?.restaurantId || req.body?.restaurant_id || req.query.restaurantId)
+          ? String(req.body?.restaurantId || req.body?.restaurant_id || req.query.restaurantId)
+          : req.tenant!.restaurantId;
+
+      const outletCode = await resolveSmavOutletCode(targetRestaurantId);
+      if (!outletCode) {
+        return res.status(400).json({ error: 'This restaurant is not mapped to a Central SMAV outlet.' });
+      }
+
+      const retrySummary = await processPendingSmavSyncJobs({ restaurantId: targetRestaurantId, forceImmediate: true });
+      const users = await adminService.getTenantUsers(targetRestaurantId);
+      const results = [];
+      for (const u of users) {
+        if (isPlatformAdminRole(u.role)) {
+          results.push({ userId: u.id, synced: false, skipped: true, reason: 'SUPERADMIN preserved locally' });
+          continue;
+        }
+        const syncRes = await syncUserWithSmavRetry({
+          restaurantId: targetRestaurantId,
+          outletCode,
+          action: u.is_active ? 'UPSERT' : 'DISABLE',
+          staff: {
+            sourceId: String(u.id),
+            email: u.email,
+            name: u.name,
+            phone: u.phone || undefined,
+            role: u.role,
+            active: Boolean(u.is_active),
+          },
+        });
+        results.push({ userId: u.id, ...syncRes });
+      }
+      res.json({ outletCode, retrySummary, results });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to synchronize staff with SMAV', details: err.message });
     }
   });
 
@@ -3879,6 +4176,23 @@ export function createApp(): express.Application {
 
   app.post('/api/webhooks/payments/:provider', handlePaymentWebhook);
   app.post('/api/webhooks/payments', handlePaymentWebhook);
+
+  // ==========================================================
+  // CENTRAL SMAV BIDIRECTIONAL SYNC WEBHOOK (AUTHENTICATED)
+  // ==========================================================
+  app.post('/api/webhooks/smav', async (req, res) => {
+    const rawBody = (req as any).rawBody || JSON.stringify(req.body || {});
+    const auth = verifySmavWebhookAuth(req.headers, rawBody);
+    if (!auth.authenticated) {
+      return res.status(auth.statusCode || 401).json({
+        success: false,
+        error: auth.error || 'Unauthorized SMAV webhook request',
+      });
+    }
+
+    const result = await handleSmavWebhook(req.body, req.headers, rawBody);
+    return res.status(result.statusCode).json(result.body);
+  });
 
   // ==========================================================
   // PHASE 6: REAL-TIME NOTIFICATIONS (SSE) FOR RESTAURANT ADMINS

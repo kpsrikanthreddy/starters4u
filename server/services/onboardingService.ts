@@ -6,6 +6,12 @@ import {
   getRestaurantPaymentSettings,
   isRestaurantSeoEligible,
 } from './tenantService.js';
+import * as adminService from './adminService.js';
+import {
+  resolveSmavOutletCode,
+  syncUserWithSmavRetry,
+  isPlatformAdminRole,
+} from './smavIntegrationService.js';
 
 export interface ProvisionRestaurantInput {
   name: string;
@@ -594,6 +600,28 @@ export async function provisionNewRestaurant(input: ProvisionRestaurantInput): P
     }
   }
 
+  // 3b. Synchronize initial outlet administrator if restaurant maps to a Central SMAV outlet
+  const outletCode = await resolveSmavOutletCode(restaurantId, slug);
+  if (outletCode) {
+    try {
+      await syncUserWithSmavRetry({
+        restaurantId,
+        outletCode,
+        action: 'UPSERT',
+        staff: {
+          sourceId: String(userId),
+          email,
+          name: ownerName,
+          phone,
+          role: 'RESTAURANT_ADMIN',
+          active: true,
+        },
+      });
+    } catch (syncErr: any) {
+      console.warn('[OnboardingService] SMAV initial admin sync queued/failed:', syncErr?.message);
+    }
+  }
+
   // 4. Fetch and return created composite detail
   const profile = await getPlatformRestaurantDetail(restaurantId);
 
@@ -1108,6 +1136,37 @@ export async function updatePlatformRestaurantDetails(
     }
     sub.plan_name = subscriptionPlan.toLowerCase();
     sub.amount = subscriptionPlan.toLowerCase().includes('enterprise') ? 4999 : subscriptionPlan.toLowerCase().includes('starter') ? 999 : 1999;
+  }
+
+  // Synchronize updated outlet administrators with Central SMAV when owner/contact changes
+  if (ownerName || phone || email) {
+    const outletCode = await resolveSmavOutletCode(restaurantId);
+    if (outletCode) {
+      try {
+        const users = await adminService.getTenantUsers(restaurantId);
+        const admins = users.filter((u: any) =>
+          !isPlatformAdminRole(u.role) &&
+          ['RESTAURANT_ADMIN', 'RESTAURANT_OWNER', 'ADMIN', 'OWNER'].includes(String(u.role || '').toUpperCase())
+        );
+        for (const adminUser of admins) {
+          await syncUserWithSmavRetry({
+            restaurantId,
+            outletCode,
+            action: adminUser.is_active ? 'UPSERT' : 'DISABLE',
+            staff: {
+              sourceId: String(adminUser.id),
+              email: adminUser.email,
+              name: adminUser.name,
+              phone: adminUser.phone || undefined,
+              role: adminUser.role,
+              active: Boolean(adminUser.is_active),
+            },
+          });
+        }
+      } catch (syncErr: any) {
+        console.warn('[OnboardingService] SMAV outlet admin update sync warning:', syncErr?.message);
+      }
+    }
   }
 
   const updatedDetail = await getPlatformRestaurantDetail(restaurantId);

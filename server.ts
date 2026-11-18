@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { app, ensureInitialized } from './server/app.js';
 import { getRestaurantForSeo } from './server/services/tenantService.js';
 import { renderRestaurantHtml } from './server/services/seoService.js';
+import { startSmavRetryWorker } from './server/services/smavIntegrationService.js';
 
 dotenv.config();
 
@@ -18,6 +19,8 @@ async function startServer() {
   } catch (err) {
     console.warn('[Server Startup] Warning during initial database connection check:', err);
   }
+
+  startSmavRetryWorker();
 
   // ==========================================================
   // VITE DEV MIDDLEWARE VS PRODUCTION STATIC SERVING
